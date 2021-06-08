@@ -135,7 +135,7 @@ class Ruby2Ruby < SexpProcessor
     super
     @indent = "  "
     self.require_empty = false
-    self.strict = true
+    self.strict = false
     self.expected = String
 
     @calls = []
@@ -311,6 +311,8 @@ class Ruby2Ruby < SexpProcessor
   def process_call(exp, safe_call = false) # :nodoc:
     _, recv, name, *args = exp
 
+    aa = nil
+
     receiver_node_type = recv && recv.sexp_type
     receiver = process recv
     receiver = "(#{receiver})" if ASSIGN_NODES.include? receiver_node_type
@@ -439,7 +441,7 @@ class Ruby2Ruby < SexpProcessor
       else
       
         args = "()" if (args == '') || !args
-        "#{receiver}#{name}#{args}"
+        "#{receiver}#{name}#{aa ? '()' : args}"
       end
     end
   ensure
@@ -1480,8 +1482,8 @@ class Ruby2Ruby < SexpProcessor
 
   def parenthesize exp
     case context[1]
-    when nil, :defn, :defs, :class, :sclass, :if, :iter, :resbody, :when, :while then
-      exp
+    when nil, :defn, :defs, :class, :sclass, :iter, :if, :resbody, :when, :while then
+      "#{exp}"
     else
       "(#{exp})"
     end
