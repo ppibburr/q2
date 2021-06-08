@@ -14,7 +14,7 @@ class Foo
   
   defn [:quux_cb]
   def quux &cb
-    moof.each do |q|
+    moof().each do |q|
       cb[q]
     end
     foo(33)
@@ -43,12 +43,12 @@ class Bar < Foo
     p "foo: %d", @_reader
     p "bar: %d", @reader
     puts "each"
-    moof.each do |q|
+    moof().each do |q|
       p q
     end
-    
+    z = `(Foo.quux_cb) moof`
     puts "for"
-    for i in moof
+    for i in moof()
       p i
     end
     

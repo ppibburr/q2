@@ -23,8 +23,9 @@ ruby2ruby = Ruby2Ruby.new
 
 $scope = [Scope.new]
 sa=[]
+$ruby = []
 ARGV.each do |file|
-  ruby = file == "-" ? $stdin.read : File.read(file)
+  $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
 
   sa << sexp = parser.process(ruby, file)
 
@@ -48,6 +49,10 @@ $KLASS=nil
 $FE=nil
 $return=nil
 
+a=$ruby
+$ruby = []
+i=-1
 sa.each do |sexp|
+  $ruby << a[i+1]
   puts out=ruby2ruby.process(sexp)
 end

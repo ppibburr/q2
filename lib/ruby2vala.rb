@@ -78,7 +78,10 @@ class Regexp
   end
 end
 # :startdoc:
-
+class Sexp
+  # add arglist because we introduce the new array type in this file
+  @@array_types << :arglist
+end
 ##
 # Generate ruby code from a sexp.
 
@@ -135,16 +138,18 @@ class Ruby2Ruby < SexpProcessor
     super
     @indent = "  "
     self.require_empty = false
-    self.strict = false
+    self.strict = true
     self.expected = String
 
     @calls = []
-
+self.unsupported.push *[]
     # self.debug[:defn] = /zsuper/
   end
 
   ############################################################
   # Processors
+
+  def process_arg_paren *o;exit;end
 
   def process_alias exp # :nodoc:
     _, lhs, rhs = exp
@@ -309,9 +314,13 @@ class Ruby2Ruby < SexpProcessor
   end
 
   def process_call(exp, safe_call = false) # :nodoc:
+
+   
     _, recv, name, *args = exp
 
-    aa = nil
+   $ruby[-1].split("\n")[exp.line-1] =~ /(#{Regexp.escape(name.to_s!)}\(.*?\))/
+
+    aa = $1
 
     receiver_node_type = recv && recv.sexp_type
     receiver = process recv
@@ -319,19 +328,20 @@ class Ruby2Ruby < SexpProcessor
 
     # args = []
 
-    # this allows us to do both old and new sexp forms:
-    # exp.push(*exp.pop[1..-1]) if exp.size == 1 && exp.first.first == :arglist
+    #  this allows us to do both old and new sexp forms:
+    exp.push(*exp.pop[1..-1]) if exp.size == 1 && exp.first.first == :arglist
     
     @calls.push name
 
     in_context :arglist do
       max = args.size - 1
       args = args.map.with_index { |arg, i|
+        aa=false
         arg_type = arg.sexp_type
         is_empty_hash = arg == s(:hash)
         arg = process arg
 
-        next if arg.empty?
+        next '' if arg.empty?
 
         strip_hash = (arg_type == :hash and
                       not BINARY.include? name and
@@ -440,7 +450,7 @@ class Ruby2Ruby < SexpProcessor
         end.join("\n")        
       else
       
-        args = "()" if (args == '') || !args
+       # args = "()" if (args == '') || !args
         "#{receiver}#{name}#{aa ? '()' : args}"
       end
     end
@@ -719,9 +729,9 @@ class Ruby2Ruby < SexpProcessor
     iter = process iter
     body = process(body) || "// do nothing"
 
-    result = ["for (#{iter}_n=0; #{iter.gsub("var ",'')}_n < #{recv}.length; #{iter.gsub("var ",'')}_n++) {"]
+    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (#{iter}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {"]
 
-    result << indent("#{iter} = #{recv}[#{iter.gsub("var ",'')}_n];")
+    result << indent("#{iter} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
     result << indent(fmt_body(body))
     $scope.pop
     result << "}"
