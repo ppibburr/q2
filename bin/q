@@ -1,4 +1,5 @@
 #!/usr/bin/ruby -ws
+$t=Time.now
 $: << File.join(File.dirname(__FILE__), "/../lib")
 require 'rubygems'
 require 'ruby2vala'
@@ -24,6 +25,7 @@ ruby2ruby = Ruby2Ruby.new
 $scope = [Scope.new]
 sa=[]
 $ruby = []
+$one=nil
 ARGV.each do |file|
   $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
 
@@ -31,8 +33,12 @@ ARGV.each do |file|
 
   p sexp if $s
 
-  puts ruby2ruby.process(sexp) if $first
+  $one=ruby2ruby.process(sexp)
+  puts $one if $first
 end
+
+## One pass transpilation, requires more strict typing
+# puts $one;exit
 
 File.open("./types.rbm", "w") do |f|
   f.puts Marshal.dump($scope[0])
@@ -54,5 +60,6 @@ $ruby = []
 i=-1
 sa.each do |sexp|
   $ruby << a[i+1]
-  puts out=ruby2ruby.process(sexp)
+  puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+ruby2ruby.process(sexp)
 end
+

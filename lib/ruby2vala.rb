@@ -4,31 +4,50 @@ require "rubygems"
 require "sexp_processor"
 
 class Scope
-  attr_reader :map, :parent
-  attr_accessor :name
+  attr_reader :map, :parent, :fields
+  attr_accessor :name, :superclass
+  @@ins = []
+  
+  def self.find s, &b
+    i = @@ins.find do |q| q.name == s end
+    b.call i
+  end
+  
   def initialize p=nil
+    @@ins << self
     @parent=p
     @map={}
     @name=''
+    @fields={}
   end  
   
   def declared? q
-    q=q.to_s.gsub(/\(.*?\)/,'') if q
 
-    z=self.map[q] || (parent ? parent.declared?(q) : nil)
+    q=q.to_s.gsub(/\(.*?\)/,'').gsub("@",'') if q
+
+    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || (superclass ? Scope.find(superclass) do |s| s.declared?(q) end : nil)) if q
 
     return z if q =~ /\./
 
     z || (("#{self.name}.#{q}" != q) ? declared?("#{self.name}.#{q}") : nil)
   end
   
-  def assign q, what
-    q=q.to_s
-    unless declared?(q)
-      qq=if t=declared?(what)  
+  def guess_type(what)
+      what=what.to_s!
+      if t=declared?(what)  
         t
       else
         case what
+        when /^\"/
+          "string"
+        when /^[0-9]+$/
+          "int"
+        when /^\([0-9]+\)$/
+          "int"
+        when /^[0-9]+\.[0-9]+$/
+          "double"
+        when /^\([0-9]+\.[0-9]+\)$/
+          "double"
         when /\{[0-9]+/
           'int[]'
         when /\{\"/
@@ -43,7 +62,13 @@ class Scope
         else
           :var
         end
-      end
+      end  
+  end
+  
+  def assign q, what
+    q=q.to_s
+    unless declared?(q)
+      qq = guess_type(what)
       
       self.map[q] = qq
     end
@@ -408,7 +433,9 @@ self.unsupported.push *[]
         receiver = ""
       end
 
-      if name.to_s == 'each'
+      if (name.to_s == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
+        "new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents()"
+      elsif name.to_s == 'each'
         $FE = receiver
         ("foreach (")
       elsif (name.to_s == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
@@ -433,27 +460,30 @@ self.unsupported.push *[]
         
         ""
       elsif name.to_s == "property"
-        $PROP = true
+        $PROP = []
         if default = n_args[2]
+          push_sig n_args[0].to_s!, n_args[1].to_s!
           ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n get;set; default = #{default}; \n}")
         else
-          "public #{n_args[1].to_s!} _#{n_args[0].to_s!};\n"+
+          push_sig n_args[0].to_s!, n_args[1].to_s!
+          push_sig "_"+n_args[0].to_s!, n_args[1].to_s!
+          "private #{n_args[1].to_s!} _#{n_args[0].to_s!};\n"+
           ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
         end
       elsif name.to_s == "attr_accessor"
-        $PROP = true
-        n_args.map do |a|
-          ("public %s #{a.to_s!} { get; set; }")
+        $PROP = n_args.map do |q| q.to_s! end
+        $PROP.map do |a|
+          ("public %s #{a} { get; set; }")
         end.join("\n")
       elsif name.to_s == "attr_reader"
-        $PROP = true
-        n_args.map do |a|
-          ("public %s #{a.to_s!} { get; }")
+        $PROP = n_args.map do |q| q.to_s! end
+        $PROP.map do |a|
+          ("public %s #{a} { get; }")
         end.join("\n")
       elsif name.to_s == "attr_writer"
-        $PROP = true
-        n_args.map do |a|
-          ("public %s #{a.to_s!} { set; }")
+        $PROP = n_args.map do |q| q.to_s! end
+        $PROP.map do |a|
+          ("public %s #{a} { set; }")
         end.join("\n")        
       else
       
@@ -509,7 +539,7 @@ self.unsupported.push *[]
   end
 
   def process_class exp # :nodoc:
-    "#{exp.comments}public class #{util_module_or_class(exp, true)}"
+    "#{exp.comments.split("\n").map do |q| "// "+q end.join("\n")}\npublic class #{util_module_or_class(exp, true)}"
   end
 
   def process_colon2 exp # :nodoc:
@@ -564,7 +594,7 @@ self.unsupported.push *[]
     ($scope||=[]) << LocalScope.new(scope)
     _, name, args, *body = exp
 
-    comm = exp.comments
+    comm = "#{exp.comments.split("\n").map do |q| "// "+q end.join("\n")}\n"
     args = process args
     args = "" if args == "()"
 
@@ -610,17 +640,17 @@ self.unsupported.push *[]
     body = body.join("\n")
     body = body.lines.to_a[1..-2].join("\n") if
       simple && body =~ /^\Abegin/ && body =~ /^end\z/
-    body = indent(fmt_body(body)) unless simple && body =~ /(^|\n)rescue/
+    body = indent(fmt_body(body,exp)) unless simple && body =~ /(^|\n)rescue/
 
 
      
-    dec = scope.map.map do |q,t|
+    dec = (scope.map.map do |q,t|
       l=args.gsub(/\(|\)/,'').split(",").map do |q|
         q.strip.to_s!
       end
       next "" if l.index(q)
       t == :var ? '' : indent("#{t} #{q};\n")
-    end.join+"\n"
+    end.join+"\n") unless scope.parent.is_a?(LocalScope)
      
     type = :void
     type = $return if $return
@@ -629,8 +659,9 @@ self.unsupported.push *[]
 
     $SIG = nil
     $return = false
-    $scope[0].map[scope.parent.name+"."+name.to_s] = type
-    
+    $scope << $scope[-2]
+    push_sig(name.to_s, type) unless $PROP
+    $scope.pop
     i=-1
     args = "()" if (!args) || (args=='')
     args="("+args.gsub(/\(|\)/,'').split(",").map do |q| i+=1; "#{scope.map[q.strip.to_s!]} #{q}" end.join(", ")+")" if args!="()"
@@ -639,10 +670,14 @@ self.unsupported.push *[]
      
     virtual = ($SIGNAL && (body.strip!='')) 
      
-    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n")
+    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     r
   end
+
+  def push_sig n, t
+    $scope[0].map["#{scope.name}."+n.to_s] = t  
+  end 
 
   def process_defs exp # :nodoc:
     _, lhs, name, args, *body = exp
@@ -653,7 +688,12 @@ self.unsupported.push *[]
 
     name = "#{lhs}.#{name}"
 
-    process_defn s(:defn, name, args, *body)
+    s = s(:defn, name, args, *body)
+    s.line = exp.line
+    s.file = exp.file
+    s.comments = exp.comments
+
+    process_defn s
   end
 
   def process_dot2(exp) # :nodoc:
@@ -736,10 +776,10 @@ self.unsupported.push *[]
     iter = process iter
     body = process(body) || "// do nothing"
 
-    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (#{iter}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {"]
+    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (#{iter}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
 
     result << indent("#{iter} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
-    result << indent(fmt_body(body))
+    result << indent(fmt_body(body,exp))
     $scope.pop
     result << "}"
 
@@ -752,7 +792,9 @@ self.unsupported.push *[]
 
   def process_gvar exp # :nodoc:
     _, name = exp
-
+    return "GLib.Environment.get_prgname()" if name.to_s =~ /\$0/
+    return "\"#{File.expand_path(exp.file)}\"" if name.to_s =~ /\$FILENAME/
+    return "#{exp.line}" if name.to_s =~ /\$LINENO/
     name.to_s
   end
 
@@ -779,10 +821,26 @@ self.unsupported.push *[]
   def process_iasgn(exp) # :nodoc:
     _, lhs, rhs = exp
 
+    lhs = lhs.to_s.gsub("@", 'this.')
+
     if rhs then
-      "#{lhs} = #{process rhs}"
+      q="#{lhs} = #{r=process(rhs).to_s!}"
+      s=scope
+      until !s.is_a?(LocalScope)
+        s=s.parent
+      end
+      if t=s.declared?(a=lhs.gsub(/^this\./,''))
+      
+      else
+        t=s.assign(scope.name+"."+a,r)
+        
+        s.fields[a]=t if b = t!=:var
+      
+      end
+      
+      q
     else # part of an masgn
-      lhs.to_s
+      lhs
     end
   end
 
@@ -836,18 +894,21 @@ self.unsupported.push *[]
     ""
   end
   
-  def fmt_body body
-    body=body.split("\n").map do |q|
-      next q+";" if (q.strip =~ / \= \{/) && (q.strip !~ /(\;$)/)
-      if q.strip !~ /(\;$)|(\}$)/              
+  def fmt_body body, e=nil
+    ee=""
+    ee="//#{e.file}: #{e.line}\n" if e && true
+    body=ee+body.split("\n").map do |q|
+      next q+";" if (q.strip =~ / \= \{/) && (q.strip !~ /;/)
+      z=if q.strip !~ /(\;$)|(\}$)/              
         if q.strip !~ /\{$/
-          q=='' ? q : q+";"
+          (q.strip=='') ? q : q+";"
         else
           q
         end
       else
         q
       end
+      z.gsub(/^\s+\;/,'')
     end.join("\n") if body
   end
 
@@ -857,7 +918,11 @@ self.unsupported.push *[]
     is_lambda = iter.sexp_type == :lambda
 
     iter = process iter
+
+    $scope << $scope[-2] if $PROP && !$PROP.empty?    
     body = process body if body
+    $scope.pop if $PROP && !$PROP.empty?
+    
 
     args = case
            when args == 0 then
@@ -891,39 +956,46 @@ self.unsupported.push *[]
         
       else
         iter << "(" if (iter !~ /\)$/) && !$FE
-        result << "#{iter.gsub(/\)$/,', ')} (#{args}) => {" if !$FE
-        result << "#{iter} #{args} {" if $FE
+        result << "#{iter.gsub(/\)$/,', ')} (#{args}) => {\n" if !$FE
+        result << "\n#{iter} #{args} {\n" if $FE
         result << '' if !$FE
       end
     end
     
-    body = fmt_body(body)
+    body = fmt_body(body.strip)
     
     if $PROP
-      $PROP = false
-      q="#{iter.to_s! % body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {","get {").gsub("set() {", "set {").strip.split("\n")
+      q="#{iter.to_s! % t=body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {\n","\nget {").gsub("set() {\n", "\nset {").strip.split("\n")
       i=-1
-      if q.length < 2
-        return [q[0],indent(fmt_body(q[1..-2].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n"),q[-1]].join("\n").gsub(/^\s+\;\n/m,"\n")
-      else
-        return [q[0],q[1],indent(fmt_body(q[2..-2].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n"),q[-1]].join("\n").gsub(/^\s+\;\n/m,"\n")
+
+      $PROP.each do |q|
+        push_sig q,t.to_s!
+        push_sig "_"+q,t.to_s!
       end
+      $PROP = false
+      if q.length < 2
+        qq= [q[0],indent(fmt_body(q[1..-1].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n")].join("\n").gsub(/^\s+\;\n/m,"\n")
+      else
+        qq=[q[0],q[1],indent(fmt_body(q[2..-2].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n"),q[-1]].join("\n").gsub(/^\s+\;\n/m,"\n")
+      end
+      return qq
     end
     
     result << if body then
-                " #{body.strip} "
+                indent(" #{body.strip} ")
               else
                 " "
               end
-    result << "}"
+    result << "\n" if $FE
+    result << "\n}"
     result << ")" if !$FE
-
+    result << "\n" if fe=$FE
     $FE = nil
     result = result.join
     
     $return = false
     
-    return result if result !~ /\n/ and result.size < LINE_LENGTH
+    return result #if (fe) || result !~ /\n/ and result.size < LINE_LENGTH
 
     result = []
 
@@ -939,7 +1011,7 @@ self.unsupported.push *[]
     result << "\n"
     if body then
       result << indent(body.strip)
-      result << "\n"
+      result << "\n" unless $PROP
     end
     result << e
     result.join
@@ -947,7 +1019,7 @@ self.unsupported.push *[]
 
   def process_ivar(exp) # :nodoc:
     _, name = exp
-    name.to_s
+    name.to_s.gsub("@",'this.')
   end
 
   def process_kwsplat(exp)
@@ -1066,7 +1138,7 @@ self.unsupported.push *[]
 
   def process_nth_ref(exp) # :nodoc:
     _, n = exp
-    "$#{n}"
+    "$#{n}qq"
   end
 
   # TODO: Infer
@@ -1193,7 +1265,8 @@ self.unsupported.push *[]
       rhs_type = rhs.sexp_type
       rhs = process rhs
       rhs = "(#{rhs})" if ASSIGN_NODES.include? rhs_type
-      $return = scope.declared?(rhs);
+      $return = scope.guess_type(rhs);
+      $return = nil if $return == :var
       "return #{rhs}"
     end
   end
@@ -1572,6 +1645,7 @@ self.unsupported.push *[]
     if superk then
       superk = process superk
       result << " : #{superk}" if superk
+      scope.superclass = superk if superk
     end
 
     result << " {\n"
@@ -1581,10 +1655,19 @@ self.unsupported.push *[]
     }
 
     body = unless body.empty? then
-             indent(fmt_body(body.find_all do |q| q.strip !='' end.join("\n\n"))) + "\n"
+             indent(fmt_body(body.find_all do |q| q end.map do |q| (q.strip =~ /^\}$/) ? q+"\n" : q end.join("\n"))) + "\n"
            else
              ""
            end
+    unless scope.fields.empty?
+      result << indent("// Fields set to infered type via @<var> assignment!\n")+"\n"
+    
+      scope.fields.each do |k,v|
+        pri = (k.to_s! =~ /^\_/)
+        result << indent("#{pri ? "private" : "public"} #{v} #{k};\n")+"\n"
+      end
+      result << indent("// END infered @<var>\n\n")+"\n\n"
+    end
 
     result << body
     result << "}"

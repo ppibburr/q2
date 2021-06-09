@@ -28,15 +28,20 @@ class Bar < Foo
   
   property(:prop1, :int, 5)
   property(:prop2, :int)  {
-    def get; return @_prop1; end
-    def set; @_prop1 = @value; end
+    def get; return @_prop2; end
+    def set; @_prop2 = value; end
   }
 
   defn [:int,:string]
   def initialize a,b
     p a
+    @one = 1
+    @_private = "no_see_me"
     p b
+    p1 = moof()
+    p "p1 %d",p1[1]
     @accessor = 11
+    accessor = 13
     @_reader = 12
     p "foo: %d", @_accessor
     @_accessor = 14;
@@ -47,13 +52,12 @@ class Bar < Foo
     moof().each do |q|
       p q
     end
-    z = `(Foo.quux_cb) moof`
     puts "for"
     for i in moof()
       p i
     end
     
-    @foo.connect() do |i|
+    foo.connect() do |i|
       p "connect: %d",i
     end    
     
@@ -61,9 +65,34 @@ class Bar < Foo
     quux do |n|
       p n
     end
+    
+    l = last()
   end
   
-  def self.main
+  def last()
+    return 69
+  end
+  
+  # Program main entry
+  defn [:string[]]
+  def self.main args
     Bar.new(1,"two")
+    
+    p "%s: %d", $FILENAME, $LINENO
+    
+    Gtk.init(`ref args`)
+    
+    w=Gtk::Window.new(0)
+    w.title = $0
+    w.add(Gtk::Label.new("TTime = "+Q.tt.to_string()+"\nThis label text set at:\n"+$FILENAME+": "+$LINENO.to_string()))
+    w.show_all()
+    p "%s", File.read($FILENAME)
+    w.delete_event.connect() do
+      p "%s: %d => BYE!!", $FILENAME, $LINENO
+      Gtk.main_quit()
+      next false
+    end
+    
+    Gtk.main()
   end
 end
