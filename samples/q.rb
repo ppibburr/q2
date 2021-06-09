@@ -26,7 +26,8 @@ class Bar < Foo
   attr_reader(:reader)     {:int}
   attr_writer(:writer)     {:int}
   
-  property(:prop1, :int, 5) {
+  property(:prop1, :int, 5)
+  property(:prop2, :int)  {
     def get; return @_prop1; end
     def set; @_prop1 = @value; end
   }

@@ -273,10 +273,14 @@ self.unsupported.push *[]
 
   def process_block exp # :nodoc:
     _, *body = exp
+    result = []
+    result = ["\n\n"] if $FE
 
-    result = body.map { |sexp|
+    result.push(*body.map { |sexp|
       process sexp
-    }
+    })
+    
+    
 
     result << "// do nothing\n" if result.empty?
     result = parenthesize result.join "\n"
@@ -430,9 +434,12 @@ self.unsupported.push *[]
         ""
       elsif name.to_s == "property"
         $PROP = true
-        "public #{n_args[1].to_s!} _#{n_args[0].to_s!};"+
-        ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
-       
+        if default = n_args[2]
+          ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n get;set; default = #{default}; \n}")
+        else
+          "public #{n_args[1].to_s!} _#{n_args[0].to_s!};\n"+
+          ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
+        end
       elsif name.to_s == "attr_accessor"
         $PROP = true
         n_args.map do |a|
@@ -736,7 +743,7 @@ self.unsupported.push *[]
     $scope.pop
     result << "}"
 
-    result.join "\n"
+    result.join("\n") << "\n\n"
   end
 
   def process_gasgn exp # :nodoc:
@@ -894,7 +901,13 @@ self.unsupported.push *[]
     
     if $PROP
       $PROP = false
-      return "#{iter.to_s! % body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {","get {").gsub("set() {", "set {")
+      q="#{iter.to_s! % body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {","get {").gsub("set() {", "set {").strip.split("\n")
+      i=-1
+      if q.length < 2
+        return [q[0],indent(fmt_body(q[1..-2].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n"),q[-1]].join("\n").gsub(/^\s+\;\n/m,"\n")
+      else
+        return [q[0],q[1],indent(fmt_body(q[2..-2].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n"),q[-1]].join("\n").gsub(/^\s+\;\n/m,"\n")
+      end
     end
     
     result << if body then
@@ -904,6 +917,7 @@ self.unsupported.push *[]
               end
     result << "}"
     result << ")" if !$FE
+
     $FE = nil
     result = result.join
     
