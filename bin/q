@@ -21,7 +21,7 @@ ARGV.push "-" if ARGV.empty?
 
 parser    = RubyParser.new
 ruby2ruby = Ruby2Ruby.new
-
+$delete = []
 $scope = [Scope.new]
 sa=[]
 $ruby = []
@@ -58,8 +58,39 @@ $return=nil
 a=$ruby
 $ruby = []
 i=-1
+#$two = true
 sa.each do |sexp|
   $ruby << a[i+1]
+  o=ruby2ruby.process(sexp)
+  puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+o if $two
+  
+  ## Two pass compilation more inference
+  ## return types, full type assignment to vars, argument types from usage, more fields values
+  exit if $two
+end
+File.open("./types.rbm", "w") do |f|
+  f.puts Marshal.dump($scope[0])
+end
+
+  begin
+    $scope = [Marshal.load(open('./types.rbm').read)]
+  rescue
+    raise "hell"
+  end
+
+$SIG=nil
+$KLASS=nil
+$FE=nil
+$return=nil
+
+
+$ruby = []
+i=-1
+sa.each do |sexp|
+  $ruby << a[i+1]
+  
+  ##  Three passes: much infer
+  ##  return type, full type var assigment, return of type infered from argument, most field values
   puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+ruby2ruby.process(sexp)
 end
 

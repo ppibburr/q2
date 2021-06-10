@@ -4,13 +4,21 @@ require "rubygems"
 require "sexp_processor"
 
 class Scope
-  attr_reader :map, :parent, :fields
-  attr_accessor :name, :superclass
+  attr_reader :map, :parent, :fields, :args
+  attr_accessor :name, :superclass, :return_type
   @@ins = []
   
   def self.find s, &b
     i = @@ins.find do |q| q.name == s end
     b.call i
+  end
+  
+  def to_s!
+    to_s
+  end
+
+  def to_s
+    return_type
   end
   
   def initialize p=nil
@@ -19,6 +27,7 @@ class Scope
     @map={}
     @name=''
     @fields={}
+    @args=[]
   end  
   
   def declared? q
@@ -486,7 +495,20 @@ self.unsupported.push *[]
           ("public %s #{a} { set; }")
         end.join("\n")        
       else
-      
+        s=scope
+        until !s.is_a?(LocalScope)
+          s=s.parent
+        end
+        
+        if m=s.declared?(name.to_s!)
+          n_args.each_with_index do |q,i|
+            if t=m.args[i]
+            else
+              m.args << s.guess_type(q.to_s!)        
+            end
+          end if n_args && m.is_a?(Scope)
+        end
+        
        # args = "()" if (args == '') || !args
         "#{receiver}#{name}#{aa ? '()' : args}"
       end
@@ -630,6 +652,19 @@ self.unsupported.push *[]
     name = name.to_s.split(".")[-1]
 
 
+    m_args = rs = $scope[0].map["#{scope.parent.name}.#{name.to_s}"]
+    if m_args.is_a?(Scope)
+      m_args = m_args.args
+    else
+      m_args=nil
+    end
+    
+    args = "()" if (!args) || (args=='')
+    args=args.gsub(/\(|\)/,'').split(",")
+    i=-1
+    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!]) : scope.map[q.strip.to_s!]} #{q=q.to_s!}";scope.map[q]=t unless scope.declared?(q);x; end.join(", ")+")" if args!="()"    
+
+
     body = body.map { |ssexp|
       process ssexp
     }
@@ -642,29 +677,35 @@ self.unsupported.push *[]
       simple && body =~ /^\Abegin/ && body =~ /^end\z/
     body = indent(fmt_body(body,exp)) unless simple && body =~ /(^|\n)rescue/
 
-
-     
-    dec = (scope.map.map do |q,t|
-      l=args.gsub(/\(|\)/,'').split(",").map do |q|
-        q.strip.to_s!
-      end
-      next "" if l.index(q)
-      t == :var ? '' : indent("#{t} #{q};\n")
-    end.join+"\n") unless scope.parent.is_a?(LocalScope)
-     
     type = :void
-    type = $return if $return
+    ($rt = type = $return) if $return
     type = :Value if type == :var
     type = $SIG[1] if $SIG && $SIG[1]
+    scope.return_type = type
+    type = scope
+    
+
+    dec = ((scope).map.map do |q,t|
+      t=t.to_s!
+      q=q.to_s!.strip
+      l=args.strip.gsub(/^\(/,'').gsub(/\)$/,'').split(",").map do |q|
+        q=q.strip.to_s!.split(" ")[-1]
+      end
+     # p ll: l, q: q.to_s!
+      next "" if l.index(q.to_s!)
+      t == 'var' ? '' : indent("#{t.to_s!} #{q};\n")
+    end.join+"\n") unless scope.parent.is_a?(LocalScope)
 
     $SIG = nil
     $return = false
     $scope << $scope[-2]
-    push_sig(name.to_s, type) unless $PROP
+    push_sig(name.to_s, type) unless $PROP 
+    
     $scope.pop
+    type=type.to_s!
     i=-1
-    args = "()" if (!args) || (args=='')
-    args="("+args.gsub(/\(|\)/,'').split(",").map do |q| i+=1; "#{scope.map[q.strip.to_s!]} #{q}" end.join(", ")+")" if args!="()"
+
+    scope.return_type = type
 
     $scope.pop
      
@@ -832,10 +873,10 @@ self.unsupported.push *[]
       if t=s.declared?(a=lhs.gsub(/^this\./,''))
       
       else
-        t=s.assign(scope.name+"."+a,r)
+        t=s.assign(zq=scope.name+"."+a,r)
         
         s.fields[a]=t if b = t!=:var
-      
+        $delete << zq 
       end
       
       q

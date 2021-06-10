@@ -4,7 +4,7 @@ class Foo
     return a
   end
   
-  sig [:int]
+  sig []
   def foo a;
     p "foo %d", a
   end
@@ -65,11 +65,16 @@ class Bar < Foo
     quux do |n|
       p n
     end
-    
-    l = last()
+    v=almost_last("ok",69)
+    l = last(1)
   end
   
-  def last()
+  def almost_last(a,b)
+    p "al: %s -> %d", a,b
+    return a
+  end
+
+  def last(a)
     return 69
   end
   
