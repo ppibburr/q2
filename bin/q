@@ -16,26 +16,74 @@ if $h then
 
   exit 1
 end
+$run = ARGV.delete("-r")
+$shared = ARGV.delete("--lib")
+$shared ||= $gir = ARGV.delete("--gir")
+$pkg = []
+while i=ARGV.index("--pkg")
+  ARGV.delete_at(i)
+  $pkg << ARGV.delete_at(i)
+end
 
 ARGV.push "-" if ARGV.empty?
 
-parser    = RubyParser.new
+$parser = parser    = RubyParser.new
 ruby2ruby = Ruby2Ruby.new
 $delete = []
 $scope = [Scope.new]
-sa=[]
+$sa = sa={}
 $ruby = []
 $one=nil
-ARGV.each do |file|
-  $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
+$req = {}
 
-  sa << sexp = parser.process(ruby, file)
+def output
+  $sao.map do|f| "// File: #{f}\n\n"+$req[f] end.join("\n\n\n")
+end
+
+def write
+  `mkdir -p ./q_generated/#{$prg}`
+  $sao.map do|f| 
+    out = File.join("./q_generated", $prg, File.basename(f)+".vala")
+    File.open(out,"w") do |o| o.puts "// File: #{f}\n\n"+$req[f] end
+    out
+  end
+end
+
+def compile f, prg=$prg
+  pkg = '' #if !$pkg or $pkg.empty?
+  
+  unless !$pkg || $pkg.empty?
+    pkg << " --pkg "
+    pkg << $pkg.join(" --pkg ")
+  end
+  
+  lib=prg
+  lib = prg.split("_").map do |q| q.capitalize end.join() if $gir
+  l = ""
+  l = " --library=#{lib} -H #{prg}.h -X -fPIC -X -shared" if $shared
+  l << " --gir #{lib}-0.1.gir" if $gir
+  prg = prg+".so" if $shared
+  puts c="valac#{l} #{f.join(" ")}#{pkg} -o #{prg}"
+  system c
+end
+
+def run prg=$prg
+  system "./#{prg}"
+end
+
+$sao=[]
+ARGV.each do |file|
+  $prg ||= File.basename(file).split(".")[0]
+  $sao << file
+  sexp = q_require file
 
   p sexp if $s
 
-  $one=ruby2ruby.process(sexp)
-  puts $one if $first
+  $req[file] = $one=ruby2ruby.process(sexp)
+  puts output if $first
 end
+
+$req = {}
 
 ## One pass transpilation, requires more strict typing
 # puts $one;exit
@@ -59,15 +107,17 @@ a=$ruby
 $ruby = []
 i=-1
 #$two = true
-sa.each do |sexp|
+sa.each do |f,sexp|
   $ruby << a[i+1]
-  o=ruby2ruby.process(sexp)
-  puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+o if $two
+
+  $req[sexp.file] = o=ruby2ruby.process(sexp)
+  puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+output if $two
   
   ## Two pass compilation more inference
   ## return types, full type assignment to vars, argument types from usage, more fields values
   exit if $two
 end
+$req = {}
 File.open("./types.rbm", "w") do |f|
   f.puts Marshal.dump($scope[0])
 end
@@ -86,11 +136,19 @@ $return=nil
 
 $ruby = []
 i=-1
-sa.each do |sexp|
+$sao.each do |f|
+  sexp = $sa[f]
   $ruby << a[i+1]
+  
+  $req[sexp.file] = ruby2ruby.process(sexp)
   
   ##  Three passes: much infer
   ##  return type, full type var assigment, return of type infered from argument, most field values
-  puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+ruby2ruby.process(sexp)
 end
 
+$req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
+$sao.unshift "./q.q"
+puts output
+
+compile write
+run if $run && !$hared

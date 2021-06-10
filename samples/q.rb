@@ -1,3 +1,6 @@
+require './samples/other.rb'
+require './samples/a.rb'
+
 class Foo
   def moof
     a=[1,2,3]
@@ -66,7 +69,7 @@ class Bar < Foo
       p n
     end
     v=almost_last("ok",69)
-    l = last(1)
+    l = last(OtherB.new().other())
   end
   
   def almost_last(a,b)
@@ -97,7 +100,9 @@ class Bar < Foo
       Gtk.main_quit()
       next false
     end
-    
+    OtherA.new()
+    other = OtherB.new().other()
+    Other.new()
     Gtk.main()
   end
 end

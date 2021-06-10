@@ -3,6 +3,17 @@
 require "rubygems"
 require "sexp_processor"
 
+def q_require file
+  return nil if $sa[file]
+  
+  $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
+  
+  $sa[file] ||= (sexp = $parser.process(ruby, file))
+  
+  sexp
+end
+
+
 class Scope
   attr_reader :map, :parent, :fields, :args
   attr_accessor :name, :superclass, :return_type
@@ -18,7 +29,7 @@ class Scope
   end
 
   def to_s
-    return_type
+    @rt||=return_type.to_s
   end
   
   def initialize p=nil
@@ -47,6 +58,9 @@ class Scope
         t
       else
         case what
+        when /^new (.*)/
+          q=$1
+          is_new?(what) ? q : :var
         when /^\"/
           "string"
         when /^[0-9]+$/
@@ -76,12 +90,21 @@ class Scope
   
   def assign q, what
     q=q.to_s
-    unless declared?(q)
-      qq = guess_type(what)
-      
+    unless qq=declared?(q)
+      qq = (($gt.to_s != 'var') ? $gt : nil) || guess_type(what) || :var
+
+
+     
       self.map[q] = qq
     end
+      $gt = nil
+      qq
   end
+end
+
+def is_new? s
+  (s.gsub(/.*?\)/,'') == "") &&
+    s.scan(/.*?\)/).last == ")"
 end
 
 class LocalScope < Scope
@@ -350,10 +373,10 @@ self.unsupported.push *[]
       to_s.gsub(/^\:/,'')
     end
   end
-
+$ga=[]
   def process_call(exp, safe_call = false) # :nodoc:
 
-   
+   $gt = nil if $gt.to_s =~ /var|void/
     _, recv, name, *args = exp
 
    $ruby[-1].split("\n")[exp.line-1] =~ /(#{Regexp.escape(name.to_s!)}\(.*?\))/
@@ -370,15 +393,18 @@ self.unsupported.push *[]
     exp.push(*exp.pop[1..-1]) if exp.size == 1 && exp.first.first == :arglist
     
     @calls.push name
-
+    gt = $gt
+    $gt=nil
+    r_args = []
     in_context :arglist do
       max = args.size - 1
+
       args = args.map.with_index { |arg, i|
         aa=false
         arg_type = arg.sexp_type
         is_empty_hash = arg == s(:hash)
         arg = process arg
-
+        r_args << $gt
         next '' if arg.empty?
 
         strip_hash = (arg_type == :hash and
@@ -393,7 +419,7 @@ self.unsupported.push *[]
         arg
       }.compact
     end
-
+    $gt = gt
     case name
     when *BINARY then
       if safe_call
@@ -444,13 +470,32 @@ self.unsupported.push *[]
 
       if (name.to_s == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
         "new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents()"
+      elsif (name.to_s == "require")
+        s=scope
+        p=$PROP
+        f=$FE
+        $PROP = nil
+        $FE = nil
+        $scope << $scope[0]  
+        if sxp=eval("q_require#{args}")
+          f=$sao.pop
+          $sao << sxp.file
+          $req[sxp.file] = (process(sxp))
+          $sao << f        
+        end
+        $scope.pop
+        $FE=f
+        $PROP=p
+        ''
       elsif name.to_s == 'each'
         $FE = receiver
         ("foreach (")
       elsif (name.to_s == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
         ""
       elsif name.to_s == "new"
-        "new #{receiver.to_s.gsub(/\.$/,'')}#{args}"
+        re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{args.to_s == "" ? '()' : args}"
+
+        re
       elsif name.to_s == "GenericType"
         "#{n_args[0]}<#{n_args[1..-1].join(",")}>"
       elsif name.to_s == 'sig'
@@ -501,16 +546,20 @@ self.unsupported.push *[]
         end
         
         if m=s.declared?(name.to_s!)
-          n_args.each_with_index do |q,i|
+          r_args.each_with_index do |q,i|
             if t=m.args[i]
             else
-              m.args << s.guess_type(q.to_s!)        
+              m.args << (q || scope.guess_type(n_args[i].to_s!)    )   
             end
           end if n_args && m.is_a?(Scope)
         end
         
        # args = "()" if (args == '') || !args
-        "#{receiver}#{name}#{aa ? '()' : args}"
+        s="#{receiver}#{name=name.to_s}#{aa ? '()' : args}"
+        gt = $gt ? "#{$gt}." : ''
+        gt = scope.guess_type(x=gt+name).to_s
+        $gt=gt
+        s
       end
     end
   ensure
@@ -817,9 +866,9 @@ self.unsupported.push *[]
     iter = process iter
     body = process(body) || "// do nothing"
 
-    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (#{iter}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
+    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (var #{iter}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
 
-    result << indent("#{iter} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
+    result << indent("var #{iter} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
     result << indent(fmt_body(body,exp))
     $scope.pop
     result << "}"
@@ -873,8 +922,7 @@ self.unsupported.push *[]
       if t=s.declared?(a=lhs.gsub(/^this\./,''))
       
       else
-        t=s.assign(zq=scope.name+"."+a,r)
-        
+        t=s.assign(zq=scope.name+"."+a,(r))
         s.fields[a]=t if b = t!=:var
         $delete << zq 
       end
@@ -1074,10 +1122,12 @@ self.unsupported.push *[]
     _, name, value = exp
 
     s=""
-    if (t=scope.assign(name, pv=process(value))) == :var
+    if (t= (scope.assign(name, pv=process(value)))) == :var
+
+
      s += "var "
     end
-
+    $gt = nil
     s += "#{name}"
     s += " = #{pv}" if value
     s
