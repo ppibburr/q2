@@ -2,8 +2,24 @@
 
 require "rubygems"
 require "sexp_processor"
+def f_path file
+  if File.exist?(f=File.expand_path("#{$pdir}/"+file))
+    return f
+  end
+  if File.exist?(f=File.expand_path("./"+file))
+    return f
+  end
+  if File.exist?(f=File.expand_path(file))
+    return f
+  else
+    raise "Q - No such file: #{file}"
+  end
+end
+
 
 def q_require file
+  file = f_path(file)
+ 
   return nil if $sa[file]
   
   $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
@@ -88,13 +104,13 @@ class Scope
       end  
   end
   
-  def assign q, what
-    q=q.to_s
-    unless qq=declared?(q)
-      qq = (($gt.to_s != 'var') ? $gt : nil) || guess_type(what) || :var
+  def assign q, what,cs=nil
+    q=q.to_s.gsub(/^\./,'')
+    
+    cs = self unless cs
+    unless qq=cs.declared?(q)
+      qq = (($gt.to_s != 'var') ? $gt : nil) || cs.guess_type(what) || :var
 
-
-     
       self.map[q] = qq
     end
       $gt = nil
@@ -497,7 +513,10 @@ $ga=[]
 
         re
       elsif name.to_s == "GenericType"
-        "#{n_args[0]}<#{n_args[1..-1].join(",")}>"
+        "#{n_args[0]}<#{n_args[1..-1].map do |a| a.to_s! end.join(",")}>"
+      elsif name.to_s == "generics"
+        $generics = n_args.map do |a| a.to_s! end
+        ''
       elsif name.to_s == 'sig'
 
         $SIGNAL = true
@@ -789,7 +808,7 @@ $ga=[]
   def process_dot2(exp) # :nodoc:
     _, lhs, rhs = exp
 
-    "(#{process lhs}..#{process rhs})"
+    "(#{process lhs}:#{process rhs})"
   end
 
   def process_dot3(exp) # :nodoc:
@@ -919,10 +938,10 @@ $ga=[]
       until !s.is_a?(LocalScope)
         s=s.parent
       end
-      if t=s.declared?(a=lhs.gsub(/^this\./,''))
+      if t=scope.declared?(a=lhs.gsub(/^this\./,''))
       
       else
-        t=s.assign(zq=scope.name+"."+a,(r))
+        t=s.assign(zq=scope.name+"."+a,(r),scope)
         s.fields[a]=t if b = t!=:var
         $delete << zq 
       end
@@ -1356,8 +1375,8 @@ $ga=[]
       rhs_type = rhs.sexp_type
       rhs = process rhs
       rhs = "(#{rhs})" if ASSIGN_NODES.include? rhs_type
-      $return = scope.guess_type(rhs);
-      $return = nil if $return == :var
+      $return = scope.guess_type(rhs.gsub(/^this\./,''));
+      $return = nil if ($return == :var) || $PROP
       "return #{rhs}"
     end
   end
@@ -1732,6 +1751,7 @@ $ga=[]
     
     scope.name = name.to_s.gsub(/^\./,'')
     result << name
+    result << "<#{$generics.join(", ")}>" if $klass && $generics
 
     if superk then
       superk = process superk
@@ -1762,7 +1782,8 @@ $ga=[]
 
     result << body
     result << "}"
-
+    $generics = nil
+    $klass=nil
     $scope.pop
     result.join
   end

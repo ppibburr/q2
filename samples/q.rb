@@ -1,5 +1,5 @@
-require './samples/other.rb'
-require './samples/a.rb'
+require 'other.rb'
+require 'a.rb'
 
 class Foo
   def moof
@@ -100,9 +100,13 @@ class Bar < Foo
       Gtk.main_quit()
       next false
     end
-    OtherA.new()
+    gtoa = GenericType(OtherA, :string, :int).new("foo",9)
     other = OtherB.new().other()
     Other.new()
     Gtk.main()
   end
 end
+
+__END__
+some
+stuff

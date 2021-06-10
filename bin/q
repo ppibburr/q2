@@ -73,8 +73,9 @@ end
 
 $sao=[]
 ARGV.each do |file|
+  $pdir ||= File.dirname(file)
   $prg ||= File.basename(file).split(".")[0]
-  $sao << file
+  $sao << f_path(file)
   sexp = q_require file
 
   p sexp if $s
