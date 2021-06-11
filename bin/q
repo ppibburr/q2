@@ -1,4 +1,4 @@
-#!/usr/bin/ruby -ws
+#!/usr/bin/env ruby
 $t=Time.now
 $: << File.join(File.dirname(__FILE__), "/../lib")
 require 'rubygems'
@@ -16,16 +16,24 @@ if $h then
 
   exit 1
 end
+
 $run = ARGV.delete("-r")
+$exe = ARGV.index("-e")
+ARGV.delete_at $exe if $exe
+$c = ARGV.delete_at($exe) if $exe
+$run = true if $c
+ARGV << "%s" if $exe
 $shared = ARGV.delete("--lib")
 $shared ||= $gir = ARGV.delete("--gir")
 $pkg = []
+
 while i=ARGV.index("--pkg")
   ARGV.delete_at(i)
   $pkg << ARGV.delete_at(i)
 end
 
-ARGV.push "-" if ARGV.empty?
+
+ARGV.push "-" if ARGV.empty? && !$c
 
 $parser = parser    = RubyParser.new
 ruby2ruby = Ruby2Ruby.new
@@ -44,6 +52,7 @@ def write
   `mkdir -p ./q_generated/#{$prg}`
   $sao.map do|f| 
     out = File.join("./q_generated", $prg, File.basename(f)+".vala")
+    STDERR.puts "transpiled: #{out}"
     File.open(out,"w") do |o| o.puts "// File: #{f}\n\n"+$req[f] end
     out
   end
@@ -63,19 +72,36 @@ def compile f, prg=$prg
   l = " --library=#{lib} -H #{prg}.h -X -fPIC -X -shared" if $shared
   l << " --gir #{lib}-0.1.gir" if $gir
   prg = prg+".so" if $shared
-  puts c="valac#{l} #{f.join(" ")}#{pkg} -o #{prg}"
+  STDERR.puts c="valac#{l} #{f.join(" ")}#{pkg} -o #{prg}"
   system c
 end
 
 def run prg=$prg
-  system "./#{prg}"
+  c="./#{prg}"
+  STDERR.puts c
+  system c
 end
 
 $sao=[]
 ARGV.each do |file|
+  if file == '-'
+    $run=true
+    `mkdir -p ./.q_in`
+    file = "./.q_in/e.rb" 
+    File.open(file,"w") do |f| f.puts $stdin.read end
+  end
+  
+  if file == '%s'
+    $run=true
+    `mkdir -p ./.q_in`
+    file = "./.q_in/e.rb" 
+    File.open(file,"w") do |f| f.puts $c end
+  end  
+  
   $pdir ||= File.dirname(file)
   $prg ||= File.basename(file).split(".")[0]
-  $sao << f_path(file)
+  $sao << f=f_path(file)
+
   sexp = q_require file
 
   p sexp if $s
@@ -149,7 +175,7 @@ end
 
 $req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
 $sao.unshift "./q.q"
-puts output
+puts output if $v
 
 compile write
-run if $run && !$hared
+run if $run && !$shared

@@ -1,9 +1,13 @@
 require 'other.rb'
 require 'a.rb'
 
+require pkg: 'gtk+-3.0'
+
 class Foo
   def moof
     a=[1,2,3]
+    x = DATA.read
+    p x  
     return a
   end
   
@@ -38,23 +42,29 @@ class Bar < Foo
   defn [:int,:string]
   def initialize a,b
     p a
+    p b
+    
     @one = 1
     @_private = "no_see_me"
-    p b
+    
     p1 = moof()
     p "p1 %d",p1[1]
+    
     @accessor = 11
     accessor = 13
     @_reader = 12
+    
     p "foo: %d", @_accessor
     @_accessor = 14;
     p "foo: %d", @accessor
     p "foo: %d", @_reader
     p "bar: %d", @reader
+    
     puts "each"
     moof().each do |q|
       p q
     end
+    
     puts "for"
     for i in moof()
       p i
@@ -68,13 +78,14 @@ class Bar < Foo
     quux do |n|
       p n
     end
-    v=almost_last("ok",69)
+    
+    v = almost_last("ok",69)
     l = last(OtherB.new().other())
   end
   
-  def almost_last(a,b)
+  def almost_last(a,b=6)
     p "al: %s -> %d", a,b
-    return a
+    return b
   end
 
   def last(a)
@@ -92,17 +103,25 @@ class Bar < Foo
     
     w=Gtk::Window.new(0)
     w.title = $0
-    w.add(Gtk::Label.new("TTime = "+Q.tt.to_string()+"\nThis label text set at:\n"+$FILENAME+": "+$LINENO.to_string()))
+    w.add(Gtk::Label.new("TTime = #{Q.tt}\nThis label text set at:\n#{__FILE__}: #{$LINENO}\n\nDATA:\n"+"#{DATA.read}"))
     w.show_all()
+    
     p "%s", File.read($FILENAME)
+    
     w.delete_event.connect() do
       p "%s: %d => BYE!!", $FILENAME, $LINENO
       Gtk.main_quit()
       next false
     end
+    
+    11+3
+    
     gtoa = GenericType(OtherA, :string, :int).new("foo",9)
+    gtob = `OtherA<string, int>`.new("bar",19)
+    gtob.rt()
     other = OtherB.new().other()
     Other.new()
+    
     Gtk.main()
   end
 end

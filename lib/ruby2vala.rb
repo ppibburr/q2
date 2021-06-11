@@ -15,12 +15,26 @@ def f_path file
     raise "Q - No such file: #{file}"
   end
 end
-
+$DATA={}
+def data file
+  d = "begin;puts DATA.read;rescue;end; exit;\n#{open(file).read}"
+  File.open("./.d.q.rb","w") do |f|
+    f.puts d
+  end
+  $DATA[file] = `ruby ./.d.q.rb`
+end
 
 def q_require file
+  if file.is_a?(Hash)
+    $pkg << file[:pkg] unless $pkg.index(file[:pkg])
+    return nil
+  end
+
   file = f_path(file)
  
   return nil if $sa[file]
+  
+  data(file)
   
   $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
   
@@ -211,16 +225,29 @@ class Ruby2Ruby < SexpProcessor
     super
     @indent = "  "
     self.require_empty = false
-    self.strict = true
+    self.strict = false
     self.expected = String
 
     @calls = []
-self.unsupported.push *[]
+    self.unsupported
     # self.debug[:defn] = /zsuper/
   end
 
   ############################################################
   # Processors
+
+  def process *o
+    
+    if scope==$scope[0] && !$q
+      $q=true
+      r=super
+      r=fmt_body(r)
+      $q=false
+      r
+    else
+      r=super
+    end
+  end
 
   def process_arg_paren *o;exit;end
 
@@ -420,6 +447,7 @@ $ga=[]
         arg_type = arg.sexp_type
         is_empty_hash = arg == s(:hash)
         arg = process arg
+        
         r_args << $gt
         next '' if arg.empty?
 
@@ -443,7 +471,64 @@ $ga=[]
       elsif args.length > 1
         "#{receiver}.#{name}(#{args.join(", ")})"
       else
-        "(#{receiver} #{name} #{args.join(", ")})"
+        p add: l=scope.guess_type(receiver)
+        p add: r=scope.guess_type(args.join(", "))
+        if (lt=l.to_s!) != (rt=r.to_s!)
+          case lt
+          when "Value"
+            l="%s"
+            r="%s"
+            l="(string)%s"     if rt=="string"  && $gt = :string
+            l="(float)%s"      if rt=="float"   && $gt = :float
+            l="(int)%s"        if rt=="int"     && $gt = :int
+            l="(double)%s"     if rt=="double"  && $gt = :double
+            
+            r = r % args.join(",")
+            l = l % receiver
+            "#{l} #{name} #{r}"
+
+          when "double"
+            l="%s"
+            r="%s"
+            l="%s.to_string()" if (rt=="string") && $gt = :string
+            r="(double)%s"     if (rt=="float")  && $gt = :double 
+            r="(double)%s"     if (rt=="int")    && $gt = :double
+            r="(double)%s"     if (rt=="Value")  && $gt = :Value
+            r = r % args.join(",")
+            l = l % receiver
+            "(#{l} #{name} #{r})"
+
+          when "int"
+            l="%s"
+            r="%s"
+            l="%s.to_string()" if rt=="string"  && $gt = :string
+            l="(float)%s"      if rt=="float"   && $gt = :float
+            l="(double)%s"     if rt=="double"  && $gt = :double
+            r="(int)%s"        if rt=="Value"   && $gt = :int
+            r = r % args.join(",")
+            l = l % receiver
+            "#{l} #{name} #{r}" 
+          when "string"
+            p ADD: [l,r]
+            $gt = :string
+            l="%s"
+            r="%s"
+            r="%s.to_string()" if rt=="int"
+            r="%s.to_string()" if rt=="float"
+            r="%s.to_string()" if rt=="double"
+            r="(string)%s"     if rt=="Value"
+           
+            r = r % args.join(",")
+            l = l % receiver
+            p ADD: [l,r]
+            "(#{l} #{name} #{r})" 
+          else
+            "(#{receiver} #{name} #{args.join(", ")})"
+          end
+        else
+          $gt = lt
+          "(#{receiver} #{name} #{args.join(", ")})"
+        end
       end
     when :[] then
       receiver ||= "self"
@@ -473,7 +558,7 @@ $ga=[]
       if ['p','puts'].index(name.to_s)
         name = 'print'
         if n_args.length == 1
-          args="(#{n_args.join}.to_string()+\"\\n\")"
+          args="((#{n_args.join}).to_string()+\"\\n\")"
         else
           n_args[0] = n_args[0].to_s+'+"\n"'
           args="(#{n_args.join(',')})"
@@ -486,6 +571,8 @@ $ga=[]
 
       if (name.to_s == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
         "new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents()"
+      elsif (name.to_s == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
+        ($DATA[File.expand_path(exp.file)] || "").inspect
       elsif (name.to_s == "require")
         s=scope
         p=$PROP
@@ -503,6 +590,9 @@ $ga=[]
         $FE=f
         $PROP=p
         ''
+      elsif name.to_s == "Value"
+        $gt=:Value
+        args
       elsif name.to_s == 'each'
         $FE = receiver
         ("foreach (")
@@ -685,12 +775,14 @@ $ga=[]
     _, name, args, *body = exp
 
     comm = "#{exp.comments.split("\n").map do |q| "// "+q end.join("\n")}\n"
+    p ARGS: args
     args = process args
+    scope.map.clear
     args = "" if args == "()"
 
     if $SIG
       args.gsub(/(^\()|(\)$)/,'').split(",").each_with_index do |q,i|
-        scope.map[q.to_s.strip.to_s!] = $SIG[0][i].to_s! 
+        scope.map[q.to_s.strip.to_s!.split("=")[0]] = $SIG[0][i].to_s! 
       end
     end
 
@@ -730,8 +822,8 @@ $ga=[]
     args = "()" if (!args) || (args=='')
     args=args.gsub(/\(|\)/,'').split(",")
     i=-1
-    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!]) : scope.map[q.strip.to_s!]} #{q=q.to_s!}";scope.map[q]=t unless scope.declared?(q);x; end.join(", ")+")" if args!="()"    
-
+    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!]) : scope.map[q.strip.to_s!]} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t unless scope.declared?(q);x; end.join(", ")+")" if args!="()"    
+    args.gsub("  ", " ")
 
     body = body.map { |ssexp|
       process ssexp
@@ -757,10 +849,12 @@ $ga=[]
       t=t.to_s!
       q=q.to_s!.strip
       l=args.strip.gsub(/^\(/,'').gsub(/\)$/,'').split(",").map do |q|
-        q=q.strip.to_s!.split(" ")[-1]
+        q=q.strip.to_s!.split("=")[0].split(" ")[-1]
       end
-     # p ll: l, q: q.to_s!
+      p ll: l, q: q.to_s!
+      next "" if l.index(q.to_s!.split("=")[0].strip)
       next "" if l.index(q.to_s!)
+      next "" if l.index(q.to_s!.strip)
       t == 'var' ? '' : indent("#{t.to_s!} #{q};\n")
     end.join+"\n") unless scope.parent.is_a?(LocalScope)
 
@@ -830,7 +924,7 @@ $ga=[]
   end
 
   def process_dstr(exp) # :nodoc:
-    "\"#{util_dthing(:dstr, exp)}\""
+    "@\"#{util_dthing(:dstr, exp)}\""
   end
 
   def process_dsym(exp) # :nodoc:
@@ -1726,7 +1820,7 @@ $ga=[]
       when :str then
         dthing_escape(type, pt.last)
       when :evstr then
-        '#{%s}' % [process(pt)]
+        '$(%s.to_string())' % [process(pt)]
       else
         raise "unknown type: #{pt.inspect}"
       end
