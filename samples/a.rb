@@ -20,6 +20,7 @@ class OtherA
     q = Value(420.0)
     p q+0.69
     
+    p "int.parse:"
     p "4".to_i+4
 
     b = Q::Bar.new(11,"foo")

@@ -29,6 +29,8 @@ def q_require file
     $pkg << file[:pkg] unless $pkg.index(file[:pkg])
     return nil
   end
+  
+  return nil if file == "Q"
 
   file = f_path(file)
  
@@ -75,7 +77,7 @@ class Scope
 
     q=q.to_s.gsub(/\(.*?\)/,'').gsub("@",'') if q
 
-    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || (superclass ? Scope.find(superclass) do |s| s.declared?(q) end : nil)) if q
+    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || (superclass ? Scope.find(superclass) do |s| s ? s.declared?(q) : nil end : nil)) if q
 
     return z if q =~ /\./
 
@@ -413,7 +415,7 @@ class Ruby2Ruby < SexpProcessor
 
   class ::Object
     def to_s!
-      to_s.gsub(/^\:/,'')
+      to_s.gsub(/^\:/,'').gsub(/\"/,'')
     end
   end
 $ga=[]
@@ -422,9 +424,8 @@ $ga=[]
    $gt = nil if $gt.to_s =~ /var|void/
     _, recv, name, *args = exp
 
-   $ruby[-1].split("\n")[exp.line-1] =~ /(#{Regexp.escape(name.to_s!)}\(.*?\))/
+    aa=open(exp.file).read.split("\n")[exp.line-1] =~ /(#{Regexp.escape("#{name.to_s!}")}\(.*\))/
 
-    aa = $1
 
     receiver_node_type = recv && recv.sexp_type
     receiver = process recv
@@ -471,17 +472,18 @@ $ga=[]
       elsif args.length > 1
         "#{receiver}.#{name}(#{args.join(", ")})"
       else
-        p add: l=scope.guess_type(receiver)
-        p add: r=scope.guess_type(args.join(", "))
+        name = "+=" if name.to_s! == "<<"
+        l=scope.guess_type(receiver)
+        r=scope.guess_type(args.join(", "))
         if (lt=l.to_s!) != (rt=r.to_s!)
           case lt
           when "Value"
             l="%s"
             r="%s"
-            l="(string)%s"     if rt=="string"  && $gt = :string
-            l="(float)%s"      if rt=="float"   && $gt = :float
-            l="(int)%s"        if rt=="int"     && $gt = :int
-            l="(double)%s"     if rt=="double"  && $gt = :double
+            l="(string)%s"     if rt=="string"  && ($gt = :string)
+            l="(float)%s"      if rt=="float"   && ($gt = :float)
+            l="(int)%s"        if rt=="int"     && ($gt = :int)
+            l="(double)%s"     if rt=="double"  && ($gt = :double)
             
             r = r % args.join(",")
             l = l % receiver
@@ -490,10 +492,10 @@ $ga=[]
           when "double"
             l="%s"
             r="%s"
-            l="%s.to_string()" if (rt=="string") && $gt = :string
-            r="(double)%s"     if (rt=="float")  && $gt = :double 
-            r="(double)%s"     if (rt=="int")    && $gt = :double
-            r="(double)%s"     if (rt=="Value")  && $gt = :Value
+            l="%s.to_string()" if (rt=="string") && ($gt = :string)
+            r="(double)%s"     if (rt=="float")  && ($gt = :double)
+            r="(double)%s"     if (rt=="int")    && ($gt = :double)
+            r="(double)%s"     if (rt=="Value")  && ($gt = :Value)
             r = r % args.join(",")
             l = l % receiver
             "(#{l} #{name} #{r})"
@@ -501,15 +503,15 @@ $ga=[]
           when "int"
             l="%s"
             r="%s"
-            l="%s.to_string()" if rt=="string"  && $gt = :string
-            l="(float)%s"      if rt=="float"   && $gt = :float
-            l="(double)%s"     if rt=="double"  && $gt = :double
-            r="(int)%s"        if rt=="Value"   && $gt = :int
+            l="%s.to_string()" if rt=="string"  && ($gt = :string)
+            l="(float)%s"      if rt=="float"   && ($gt = :float)
+            l="(double)%s"     if rt=="double"  && ($gt = :double)
+            r="(int)%s"        if rt=="Value"   && ($gt = :int)
             r = r % args.join(",")
             l = l % receiver
             "#{l} #{name} #{r}" 
           when "string"
-            p ADD: [l,r]
+
             $gt = :string
             l="%s"
             r="%s"
@@ -520,7 +522,7 @@ $ga=[]
            
             r = r % args.join(",")
             l = l % receiver
-            p ADD: [l,r]
+
             "(#{l} #{name} #{r})" 
           else
             "(#{receiver} #{name} #{args.join(", ")})"
@@ -691,11 +693,11 @@ $ga=[]
             end
           end if n_args && m.is_a?(Scope)
         end
-        
-       # args = "()" if (args == '') || !args
-        s="#{receiver}#{name=name.to_s}#{aa ? '()' : args}"
+
+        # args = "()" if (args == '') || !args
+        s="#{receiver}#{n}#{aa ? '()' : args}"
         gt = $gt ? "#{$gt}." : ''
-        gt = scope.guess_type(x=gt+name).to_s
+        gt = scope.guess_type(x=gt+n).to_s
         $gt=gt
         s
       end
@@ -803,8 +805,11 @@ $ga=[]
     ($scope||=[]) << LocalScope.new(scope)
     _, name, args, *body = exp
 
+    name = "get" if name.to_s! == "[]"
+    name = "set" if name.to_s! == "[]="
+    
     comm = "#{exp.comments.split("\n").map do |q| "// "+q end.join("\n")}\n"
-    p ARGS: args
+
     args = process args
     scope.map.clear
     args = "" if args == "()"
@@ -880,7 +885,7 @@ $ga=[]
       l=args.strip.gsub(/^\(/,'').gsub(/\)$/,'').split(",").map do |q|
         q=q.strip.to_s!.split("=")[0].split(" ")[-1]
       end
-      p ll: l, q: q.to_s!
+
       next "" if l.index(q.to_s!.split("=")[0].strip)
       next "" if l.index(q.to_s!)
       next "" if l.index(q.to_s!.strip)
@@ -902,7 +907,7 @@ $ga=[]
      
     virtual = ($SIGNAL && (body.strip!='')) 
      
-    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n\n")
+    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_s!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     r
   end

@@ -17,6 +17,8 @@ if $h then
   exit 1
 end
 
+$i = ARGV.delete("-i")
+
 $run = ARGV.delete("-r")
 $exe = ARGV.index("-e")
 ARGV.delete_at $exe if $exe
@@ -84,6 +86,15 @@ end
 
 $sao=[]
 ARGV.each do |file|
+  if $i
+
+    q = DATA.read
+    q << "; load '#{f=File.expand_path(file)}'"
+    File.open("./.libq.rb","w") do |o| o.puts q end
+    `ruby -r ./.libq.rb #{f}` 
+    exit
+  end
+
   if file == '-'
     $run=true
     `mkdir -p ./.q_in`
@@ -179,4 +190,45 @@ puts output if $v
 
 compile write
 run if $run && !$shared
-p $scope[0]
+
+__END__
+
+module Q;end
+def require *o, pkg: nil
+  return true if o[0] == 'Q'
+  return(r=super(*o)) if !pkg
+  super "gtk3"
+  super "glib2"
+  Gtk::Window
+  def Gtk.init *o;end
+  return true
+end
+
+def defn *o; end
+def generics *o; end
+$ns = []
+def namespace m;
+  $ns << m
+  m
+end
+
+def GenericType(c,*t)
+  c
+end
+
+def ref *o;end
+
+class String
+  alias :get :[]
+  def [] i=nil
+    get i
+  end
+end
+
+at_exit {
+
+  if n=$ns.find do |q| q.respond_to?(:main) end
+    n.main(ARGV)
+  end
+}
+
