@@ -19,6 +19,13 @@ class OtherA
     p "value: " + z
     q = Value(420.0)
     p q+0.69
+    
+    p "4".to_i+4
+
+    b = Q::Bar.new(11,"foo")
+    for i in b.moof()
+      p i
+    end
 
     return @t
   end

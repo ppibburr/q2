@@ -179,3 +179,4 @@ puts output if $v
 
 compile write
 run if $run && !$shared
+p $scope[0]

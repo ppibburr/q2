@@ -3,6 +3,8 @@ require 'a.rb'
 
 require pkg: 'gtk+-3.0'
 
+namespace module Q
+
 class Foo
   def moof
     a=[1,2,3]
@@ -125,7 +127,7 @@ class Bar < Foo
     Gtk.main()
   end
 end
-
+end
 __END__
 some
 stuff

@@ -569,17 +569,18 @@ $ga=[]
         receiver = ""
       end
 
-      if (name.to_s == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
+      if ((n=name.to_s) == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
         "new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents()"
-      elsif (name.to_s == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
+      elsif (n == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
         ($DATA[File.expand_path(exp.file)] || "").inspect
-      elsif (name.to_s == "require")
+      elsif (n == "require")
         s=scope
         p=$PROP
         f=$FE
         $PROP = nil
         $FE = nil
         $scope << $scope[0]  
+        ns=$ns
         if sxp=eval("q_require#{args}")
           f=$sao.pop
           $sao << sxp.file
@@ -588,41 +589,42 @@ $ga=[]
         end
         $scope.pop
         $FE=f
+        $ns=ns
         $PROP=p
         ''
-      elsif name.to_s == "Value"
+      elsif n == "Value"
         $gt=:Value
         args
-      elsif name.to_s == 'each'
+      elsif n == 'each'
         $FE = receiver
         ("foreach (")
-      elsif (name.to_s == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
+      elsif (n == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
         ""
-      elsif name.to_s == "new"
+      elsif n == "new"
         re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{args.to_s == "" ? '()' : args}"
 
         re
-      elsif name.to_s == "GenericType"
+      elsif n == "GenericType"
         "#{n_args[0]}<#{n_args[1..-1].map do |a| a.to_s! end.join(",")}>"
-      elsif name.to_s == "generics"
+      elsif n == "generics"
         $generics = n_args.map do |a| a.to_s! end
         ''
-      elsif name.to_s == 'sig'
+      elsif n == 'sig'
 
         $SIGNAL = true
         $SIG = [n_args[0].gsub(/\{|\}/,'').split(",").map do |q| q.strip.to_s! end, n_args[1]]
         ""
-      elsif name.to_s == 'dele'
+      elsif n == 'dele'
 
         $DELEGATE = true
         $SIG = [n_args[0].gsub(/\{|\}/,'').split(",").map do |q| q.strip.to_s! end, n_args[1]]
         ""
-      elsif name.to_s == 'defn'
+      elsif n == 'defn'
 
         $SIG = [n_args[0].gsub(/\{|\}/,'').split(",").map do |q| q.strip.to_s! end, n_args[1]]
         
         ""
-      elsif name.to_s == "property"
+      elsif n == "property"
         $PROP = []
         if default = n_args[2]
           push_sig n_args[0].to_s!, n_args[1].to_s!
@@ -633,21 +635,48 @@ $ga=[]
           "private #{n_args[1].to_s!} _#{n_args[0].to_s!};\n"+
           ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
         end
-      elsif name.to_s == "attr_accessor"
+      elsif n == "attr_accessor"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
           ("public %s #{a} { get; set; }")
         end.join("\n")
-      elsif name.to_s == "attr_reader"
+      elsif n == "attr_reader"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
           ("public %s #{a} { get; }")
         end.join("\n")
-      elsif name.to_s == "attr_writer"
+      elsif n == "attr_writer"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
           ("public %s #{a} { set; }")
         end.join("\n")        
+      elsif n == "to_s"
+        $gt=:string
+        if (t=scope.guess_type(r=receiver.to_s.gsub(/\.$/,'')).to_s) == 'Value'
+          "(string)#{r}"
+        else
+          name = "to_string"
+          "#{r}.#{name}"
+        end
+      elsif n == "to_i"
+        $gt=:int
+        if (t=scope.guess_type(r=receiver.to_s.gsub(/\.$/,'')).to_s) == 'string'
+          "int.parse(#{r})"
+        else
+          name = ""
+          "(int)#{r}#{name}"
+        end        
+      elsif n == "to_f"
+        $gt=:double
+        if (t=scope.guess_type(r=receiver.to_s.gsub(/\.$/,'')).to_s) == 'string'
+          "double.parse(#{r})"
+        else
+          name = ""
+          "(double)#{r}#{name}"
+        end 
+      elsif n == "namespace"
+        $ns = true
+        "namespace #{n_args[0]}"  
       else
         s=scope
         until !s.is_a?(LocalScope)
@@ -979,9 +1008,9 @@ $ga=[]
     iter = process iter
     body = process(body) || "// do nothing"
 
-    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (var #{iter}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
+    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (var #{iter.gsub("var ",'')}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
 
-    result << indent("var #{iter} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
+    result << indent("var #{iter.gsub("var ",'')} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
     result << indent(fmt_body(body,exp))
     $scope.pop
     result << "}"
@@ -1317,7 +1346,12 @@ $ga=[]
   end
 
   def process_module(exp) # :nodoc:
-    "#{exp.comments}iface #{util_module_or_class(exp)}"
+    if !$ns
+      "#{exp.comments}iface #{util_module_or_class(exp)}"
+    else
+       $ns=false
+      "#{util_module_or_class(exp)}"
+    end
   end
 
   def process_next(exp) # :nodoc:
@@ -1844,6 +1878,11 @@ $ga=[]
     $klass = name if is_class
     
     scope.name = name.to_s.gsub(/^\./,'')
+    
+    scope.parent.map[name.to_s] = scope
+    
+
+    
     result << name
     result << "<#{$generics.join(", ")}>" if $klass && $generics
 
