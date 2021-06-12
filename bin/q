@@ -38,13 +38,30 @@ end
 ARGV.push "-" if ARGV.empty? && !$c
 
 $parser = parser    = RubyParser.new
-ruby2ruby = Ruby2Ruby.new
+ruby2ruby =$r2v= Ruby2Ruby.new
 $delete = []
 $scope = [Scope.new]
 $sa = sa={}
 $ruby = []
 $one=nil
 $req = {}
+class Sexp
+  def mb;@mb;end
+  def mb=q;@mb=q;end
+end
+def r2vala sexp
+  $mb=false
+  l=$req[sexp.file] = $r2v.process(sexp)
+  if $mb
+  
+    q=$scope[-1].map.map do |k,v|
+      (v.to_s! == "var") ? "" : "#{v} #{k};"
+    end.join("\n  ").strip
+    $scope.pop if $scope[-2] == $scope[0]
+    l.gsub!(/\%__Q_MAIN_DEC__;/,"  "+q)
+    l << "\n  return 0;\n}"
+  end
+end
 
 def output
   $sao.map do|f| "// File: #{f}\n\n"+$req[f] end.join("\n\n\n")
@@ -178,7 +195,7 @@ $sao.each do |f|
   sexp = $sa[f]
   $ruby << a[i+1]
   
-  $req[sexp.file] = ruby2ruby.process(sexp)
+  r2vala(sexp)
   
   ##  Three passes: much infer
   ##  return type, full type var assigment, return of type infered from argument, most field values
@@ -216,7 +233,7 @@ def GenericType(c,*t)
   c
 end
 
-def ref *o;end
+def ref o;o;end
 
 class String
   alias :get :[]
@@ -224,6 +241,16 @@ class String
     get i
   end
 end
+
+class Module
+  def self.extended *o
+    p r = super;
+  rescue
+    return o[0]
+  end
+end
+
+Q_ARGV = [File.basename($0),ARGV].flatten
 
 at_exit {
 

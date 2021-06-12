@@ -239,7 +239,7 @@ class Ruby2Ruby < SexpProcessor
   # Processors
 
   def process *o
-    
+  
     if scope==$scope[0] && !$q
       $q=true
       r=super
@@ -373,13 +373,46 @@ class Ruby2Ruby < SexpProcessor
     code.join "\n"
   end
 
+  def mb? 
+
+    
+    if !$mb && (scope == $scope[0])
+    if (scope == $scope[0].map["main"])
+    else
+      $scope << ($scope[0].map["main"] ||= sc=LocalScope.new(scope))
+    end
+      $mb=true
+      "static unowned string[] __q_args__;\n"+
+      "static unowned string[] __q_argv__;\n"+
+      "static int main(string[] _q_args) {\n%__Q_MAIN_DEC__\n"+
+      "__q_argv__ = _q_args[1:-1];\n"+  
+      "__q_args__ = _q_args;\n\n"
+      
+    else
+      ""
+    end
+  end
+
   def process_block exp # :nodoc:
+
     _, *body = exp
     result = []
     result = ["\n\n"] if $FE
 
     result.push(*body.map { |sexp|
-      process sexp
+      s=''
+      if ([:call, :lasgn].index(q=sexp[0]))
+        if  q==:call
+          if ![:namespace, :require, :generics].index(sexp[2])
+            p ss: s=mb? if !$mb
+          end
+        else
+          s=mb? if  !$mb
+        end
+      end
+    
+      s=s+process(sexp)
+      s
     })
     
     
@@ -387,7 +420,7 @@ class Ruby2Ruby < SexpProcessor
     result << "// do nothing\n" if result.empty?
     result = parenthesize result.join "\n"
     result += "\n" unless result.start_with? "("
-
+p result: result
     result
   end
 
@@ -415,7 +448,11 @@ class Ruby2Ruby < SexpProcessor
 
   class ::Object
     def to_s!
-      to_s.gsub(/^\:/,'').gsub(/\"/,'')
+      to_s.gsub(/^\:/,'')
+    end
+    
+    def to_t!
+      to_s!.gsub(/\"/,'')
     end
   end
 $ga=[]
@@ -475,7 +512,7 @@ $ga=[]
         name = "+=" if name.to_s! == "<<"
         l=scope.guess_type(receiver)
         r=scope.guess_type(args.join(", "))
-        if (lt=l.to_s!) != (rt=r.to_s!)
+        if (lt=l.to_t!) != (rt=r.to_t!)
           case lt
           when "Value"
             l="%s"
@@ -694,6 +731,8 @@ $ga=[]
           end if n_args && m.is_a?(Scope)
         end
 
+
+
         # args = "()" if (args == '') || !args
         s="#{receiver}#{n}#{aa ? '()' : args}"
         gt = $gt ? "#{$gt}." : ''
@@ -768,7 +807,11 @@ $ga=[]
   def process_const exp # :nodoc:
     _, name = exp
 
-    name.to_s
+    n=name.to_s
+    if n =~ /(^ARGV$)|(^Q_ARGV$)/
+      $gt = "string[]"
+    end
+    n.gsub(/^ARGV$/,"__q_argv__").gsub(/^Q_ARGV$/,"__q_args__")
   end
 
   def process_cvar exp # :nodoc:
@@ -856,7 +899,7 @@ $ga=[]
     args = "()" if (!args) || (args=='')
     args=args.gsub(/\(|\)/,'').split(",")
     i=-1
-    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!]) : scope.map[q.strip.to_s!]} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t unless scope.declared?(q);x; end.join(", ")+")" if args!="()"    
+    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t unless scope.declared?(q);x; end.join(", ")+")" if args!="()"    
     args.gsub("  ", " ")
 
     body = body.map { |ssexp|
@@ -907,7 +950,7 @@ $ga=[]
      
     virtual = ($SIGNAL && (body.strip!='')) 
      
-    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_s!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n\n")
+    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_t!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     r
   end
