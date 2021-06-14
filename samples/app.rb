@@ -1,6 +1,29 @@
 require 'Q'
 require pkg: 'gtk+-3.0'
 
+class Foo
+  #signal {
+  #  def foo a
+  #     p "'Im a signal!', #{a}"
+  #     return 1
+  #  end
+  #
+  #  def moof;end
+  #}
+
+  #delegate {
+  #  defn [:int], :string
+  #  def quux a; end
+  #}
+  
+  def bar
+    #foo "hi"
+    return 0.88
+  end
+end
+
+
+
 namespace module Q
   generics :T
   class App < Gtk::Window
@@ -11,10 +34,18 @@ namespace module Q
       # TODO: chain
       super
       #self.title="window"
+      
+      add(l=Gtk::Label.new("Hello"))
+      
+      delete_event.connect() do
+        Gtk.main_quit()
+        next false
+      end
+      
+      x = Foo.new()
+      b = x.bar()
     end
-    
-    # TODO: derive 'set' and 'get' from []= and []
-    
+        
     # not much we can do
     defn [:int,:T]
     def []= i,t

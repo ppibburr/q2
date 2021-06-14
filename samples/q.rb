@@ -13,13 +13,17 @@ class Foo
     return a
   end
   
-  sig []
+  signal {
+  defn [:int]
   def foo a;
     p "foo %d", a
   end
+  }
   
-  dele [:int]
+  delegate { 
+  defn [:int]
   def quux_cb a; end
+  }
   
   defn [:quux_cb]
   def quux &cb
@@ -101,7 +105,7 @@ class Bar < Foo
     
     p "%s: %d", $FILENAME, $LINENO
     
-    Gtk.init(`ref args`)
+    Gtk.init(ref args)
     
     w=Gtk::Window.new(0)
     w.title = $0
@@ -128,6 +132,8 @@ class Bar < Foo
   end
 end
 end
+
+
 __END__
 some
 stuff

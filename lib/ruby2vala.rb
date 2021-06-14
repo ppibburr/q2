@@ -373,7 +373,7 @@ class Ruby2Ruby < SexpProcessor
     code.join "\n"
   end
 
-  def mb? 
+  def mb? f='q'
 
     
     if !$mb && (scope == $scope[0])
@@ -385,8 +385,9 @@ class Ruby2Ruby < SexpProcessor
       "static unowned string[] __q_args__;\n"+
       "static unowned string[] __q_argv__;\n"+
       "static int main(string[] _q_args) {\n%__Q_MAIN_DEC__\n"+
+      "string[] qa = {\"#{f}\"};foreach (var q in _q_args) {qa += q;};"+
       "__q_argv__ = _q_args[1:-1];\n"+  
-      "__q_args__ = _q_args;\n\n"
+      "__q_args__ = qa;\n\n"
       
     else
       ""
@@ -403,11 +404,11 @@ class Ruby2Ruby < SexpProcessor
       s=''
       if ([:call, :lasgn].index(q=sexp[0]))
         if  q==:call
-          if ![:namespace, :require, :generics].index(sexp[2])
-            p ss: s=mb? if !$mb
+          if ![:namespace, :require, :generics, :delegate, :signal, :defn].index(sexp[2])
+            p ss: s=mb?(exp.file) if !$mb
           end
         else
-          s=mb? if  !$mb
+          s=mb?(exp.file) if  !$mb
         end
       end
     
@@ -663,11 +664,23 @@ $ga=[]
         $SIG = [n_args[0].gsub(/\{|\}/,'').split(",").map do |q| q.strip.to_s! end, n_args[1]]
         
         ""
+      elsif n == "delegate"
+          $DELG2 = []
+          #push_sig n_args[0].to_s!, n_args[1].to_s!
+          #("public signal #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}") 
+          "%s"     
+      elsif n == "signal"
+          $SIG2 = []
+          #push_sig n_args[0].to_s!, n_args[1].to_s!
+          #("public signal #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}") 
+          "%s"     
+      
       elsif n == "property"
         $PROP = []
         if default = n_args[2]
           push_sig n_args[0].to_s!, n_args[1].to_s!
           ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n get;set; default = #{default}; \n}")
+          
         else
           push_sig n_args[0].to_s!, n_args[1].to_s!
           push_sig "_"+n_args[0].to_s!, n_args[1].to_s!
@@ -735,8 +748,13 @@ $ga=[]
 
         # args = "()" if (args == '') || !args
         s="#{receiver}#{n}#{aa ? '()' : args}"
-        gt = $gt ? "#{$gt}." : ''
+        qq=receiver.to_s!
+        qq = "." if qq==''
+        gt = $gt ? "#{$gt}." : (scope.guess_type(qq.gsub(/^\./,'').gsub(/\.$/,'')).to_s+"." || '')
+        gt = '' if gt.to_s == 'var.'
+        p XXX: qq.gsub(/^\./,'').gsub(/\.$/,''), g: n
         gt = scope.guess_type(x=gt+n).to_s
+        p XXX3: x, s: scope.map.keys
         $gt=gt
         s
       end
@@ -937,26 +955,34 @@ $ga=[]
 
     $SIG = nil
     $return = false
-    $scope << $scope[-2]
+    $scope << $scope[-2] #unless $SIG2 || $DELG2
+    p SCOPE: scope.name
+    p SCOPE2: scope.parent.name
     push_sig(name.to_s, type) unless $PROP 
-    
-    $scope.pop
+    scope.map[name.to_s] = type
+    $scope.pop #unless $SIG2 || $DELG2
     type=type.to_s!
     i=-1
 
     scope.return_type = type
 
-    $scope.pop
+    $scope.pop 
      
-    virtual = ($SIGNAL && (body.strip!='')) 
+    virtual = (($SIGNAL || $SIG2) && (body.gsub(/\/\/.*\n?/,"").strip!='')) 
      
-    r="#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{$SIGNAL ? 'signal ' : ''}#{$DELEGATE ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_t!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : " {\n#{dec}#{body}\n}"}".gsub(/\n\s*\n+/, "\n\n")
+    blk = " {\n#{dec}#{body}\n}"
+    c = ''
+    c =  "// #{exp.file}: #{exp.line}\n//\n" if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
+    blk = '' if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
+     
+    r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_t!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     r
   end
 
   def push_sig n, t
-    $scope[0].map["#{scope.name}."+n.to_s] = t  
+    $scope[0].map[k="#{scope.name}."+n.to_s] = t
+    p({SCOPE3: {k => t.to_s}})
   end 
 
   def process_defs exp # :nodoc:
@@ -1198,10 +1224,11 @@ $ga=[]
 
     iter = process iter
 
-    $scope << $scope[-2] if $PROP && !$PROP.empty?    
+    $scope << $scope[-2] if ($PROP && !$PROP.empty?)# || $SIG2 || $DELG2   
     body = process body if body
-    $scope.pop if $PROP && !$PROP.empty?
+    $scope.pop if ($PROP && !$PROP.empty?) #|| $SIG2 || $DELG2
     
+    p scope: scope.name
 
     args = case
            when args == 0 then
@@ -1231,7 +1258,7 @@ $ga=[]
       result << args
       result << " {"
     else
-      if $PROP
+      if $PROP || $SIG2 || $DELG2
         
       else
         iter << "(" if (iter !~ /\)$/) && !$FE
@@ -1243,20 +1270,27 @@ $ga=[]
     
     body = fmt_body(body.strip)
     
-    if $PROP
+    if $PROP || $SIG2 || $DELG2
       q="#{iter.to_s! % t=body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {\n","\nget {").gsub("set() {\n", "\nset {").strip.split("\n")
+      qq=""
+      p QQQ: iter
       i=-1
-
-      $PROP.each do |q|
+      a = ($PROP || (($SIG2 || $DELG2) ? [] : nil)) 
+      a.each do |q|
         push_sig q,t.to_s!
         push_sig "_"+q,t.to_s!
       end
-      $PROP = false
+
       if q.length < 2
-        qq= [q[0],indent(fmt_body(q[1..-1].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n")].join("\n").gsub(/^\s+\;\n/m,"\n")
+        if $SIG2 || $DELG2
+          qq= q.join("\n")# [q[0],indent(fmt_body((q[1..-1] ||[]).map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n")].join("\n").gsub(/^\s+\;\n/m,"\n")
+        else
+          qq= [q[0],indent(fmt_body(q[1..-1].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n")].join("\n").gsub(/^\s+\;\n/m,"\n")
+        end
       else
         qq=[q[0],q[1],indent(fmt_body(q[2..-2].map do |q| q.strip end.join("\n"))).gsub(/^\s+\;\n/m,"\n"),q[-1]].join("\n").gsub(/^\s+\;\n/m,"\n")
       end
+      $DELG2=$SIG2=$PROP = false
       return qq
     end
     

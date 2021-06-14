@@ -105,10 +105,10 @@ $sao=[]
 ARGV.each do |file|
   if $i
 
-    q = DATA.read
-    q << "; load '#{f=File.expand_path(file)}'"
+    q = DATA.read % f=File.expand_path(file)
     File.open("./.libq.rb","w") do |o| o.puts q end
-    `ruby -r ./.libq.rb #{f}` 
+    puts c="ruby -r ./.libq.rb #{f}"
+    `#{c}` 
     exit
   end
 
@@ -201,6 +201,8 @@ $sao.each do |f|
   ##  return type, full type var assigment, return of type infered from argument, most field values
 end
 
+p $scope[0].map['Foo']
+
 $req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
 $sao.unshift "./q.q"
 puts output if $v
@@ -209,19 +211,62 @@ compile write
 run if $run && !$shared
 
 __END__
+$: << f=File.expand_path(File.dirname("%s"))
+STDERR.puts f
+require 'glib2'
+class GLib::Object
+  alias :q_mm :method_missing
+  def method_missing m,*o,&b
+    if self.class.signals.index(s=m.to_s.gsub("_",'-'))
+      QGSignal.new(self,s)
+
+    else
+      q_mm m,*o,&b
+    end
+  end
+  
+  class QGSignal
+    def initialize ins, s='', &b
+      @ins = ins; @s=s
+      @b=b
+    end
+    
+    def connect &b
+      @ins.signal_connect(@s,&b)
+    end
+    
+    def [] *o,&b
+      @b.call *o,&b
+    end 
+  end
+end
+
+def signal &b
+  GLib::Object::QGSignal.new self,&b
+end
+
+def delegate &b
+  # 
+end
 
 module Q;end
 def require *o, pkg: nil
   return true if o[0] == 'Q'
-  return(r=super(*o)) if !pkg
+  return(r=super(o[0].gsub(".rb",''))) if !pkg
   super "gtk3"
-  super "glib2"
   Gtk::Window
   def Gtk.init *o;end
   return true
 end
 
-def defn *o; end
+def sig *o,&b
+end
+
+def property *o,&b;end
+
+def dele *o,&b;end
+
+def defn *o,&b; end
 def generics *o; end
 $ns = []
 def namespace m;
@@ -241,6 +286,14 @@ class String
     get i
   end
 end
+
+class Symbol
+  alias :get :[]
+  def [] i=nil
+    get i if i
+  end
+end
+
 
 class Module
   def self.extended *o
