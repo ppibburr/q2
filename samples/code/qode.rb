@@ -1,6 +1,8 @@
 require pkg: 'gtk+-3.0'
 require pkg: 'gtksourceview-3.0'
 
+require 'qte/qte.rb'
+
 namespace module Qode
   class Editor < Gtk.Window
     defn [:string?]
@@ -48,15 +50,27 @@ namespace module Qode
      
       @language_manager = Gtk::SourceLanguageManager.get_default();
 
+
+      @paned = Gtk::Paned.new(Gtk::Orientation::VERTICAL)
+
       scrolled_window = Gtk::ScrolledWindow.new(nil, nil);
       scrolled_window.set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC);
       scrolled_window.add(source_view);
-      scrolled_window.hexpand = true;
-      scrolled_window.vexpand = true;
+      paned.hexpand = true;
+      paned.vexpand = true;
+
+      paned.add1(scrolled_window)
+
+      @vte = QTe::Terminal.new()
+      vte.spawn(["/usr/bin/bash"])
+      vte.hexpand = true;
+      vte.vexpand = true;
+      
+      paned.add2(vte)
 
       grid = Gtk::Grid.new();
       grid.attach(menu_bar, 0, 0, 1, 1);
-      grid.attach(scrolled_window, 0, 1, 1, 1);
+      grid.attach(paned, 0, 1, 1, 1);
 
       add(`grid as Gtk.Widget`);
 
@@ -112,6 +126,7 @@ namespace module Qode
         file_loader = Gtk.SourceFileLoader.new(`source_view.buffer as Gtk.SourceBuffer`, file);         
         file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
         `(source_view.buffer as Gtk.SourceBuffer).set_language(language_manager.guess_language(file.location.get_path(),null));`
+        vte.feed_child("cd #{File.dirname(file.location.get_path())}\n".data)
       end    
     end
 
@@ -181,7 +196,7 @@ namespace module Qode
     end
     
     def compile
-      system "q #{file.location.get_path()}"
+      system "q #{file.location.get_path()} &"
     end
     
     def run

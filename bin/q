@@ -57,6 +57,9 @@ def r2vala sexp
     q=$scope[-1].map.map do |k,v|
       (v.to_s! == "var") ? "" : "#{v} #{k};"
     end.join("\n  ").strip
+    if t=$scope[0].map["_q_match_data"]
+   #   q << "\n_q_match_data #{t};\n"
+    end
     $scope.pop if $scope[-2] == $scope[0]
     l.gsub!(/\%__Q_MAIN_DEC__;/,"  "+q)
     l << "\n  return 0;\n}"

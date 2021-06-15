@@ -1,3 +1,4 @@
+begin;puts DATA.read;rescue;end; exit;
 require pkg: 'gtk+-3.0'
 require pkg: 'webkit2gtk-4.0'
 

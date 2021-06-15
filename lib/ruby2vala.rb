@@ -13,6 +13,10 @@ def f_path file
   if File.exist?(f=File.expand_path(file))
     return f
   else
+    if File.exist?(f=File.expand_path("#{File.dirname(__FILE__)}/../samples/"+file))
+      return f
+    end
+    p f
     raise "Q - No such file: #{file}"
   end
 end
@@ -373,7 +377,10 @@ class Ruby2Ruby < SexpProcessor
 
   def process_back_ref exp # :nodoc:
     _, n = exp
-
+    case n.to_s
+    when "+"
+      return "_q_match_data.fetch_all()[-1]"
+    end
     "$#{n}"
   end
 
@@ -524,9 +531,28 @@ $ga=[]
     end
     $gt = gt
     case name
+    when :join
+       $gt=:string
+       "Path.build_filename(#{args.join(", ")})"
+    when :basename
+      $gt=:string
+      "Path.get_basename(#{args.join(", ")})"    
+    when :dirname
+      $gt=:string
+      "Path.get_dirname(#{args.join(", ")})"
+    when :expand_path
+      $gt=:string
+      "File.new_for_commandline_arg(#{args.join(", ")}).get_path()"
     when :=~
       $gt=:bool
-      "#{args[0]}.match(#{receiver.gsub(/^\./,'')})"
+      if scope.is_a?(LocalScope)
+
+        mi=true
+        scope.map["_q_match_data"]='MatchInfo'
+        "#{args[0]}.match(#{receiver.gsub(/\.$/,'')}, 0, out _q_match_data)"
+      else
+        "#{args[0]}.match(#{receiver.gsub(/\.$/,'')})"
+      end
     when *BINARY then
       if safe_call
         "#{receiver}&.#{name}(#{args.join(", ")})"
@@ -1139,9 +1165,19 @@ $ga=[]
 
   def process_gvar exp # :nodoc:
     _, name = exp
+
+
     return "GLib.Environment.get_prgname()" if name.to_s =~ /\$0/
     return "\"#{File.expand_path(exp.file)}\"" if name.to_s =~ /\$FILENAME/
     return "#{exp.line}" if name.to_s =~ /\$LINENO/
+
+    case name.to_s
+    when "$~"
+      return "_q_match_data"
+    when "$+"
+      return "_q_match_data[-1]"
+    end
+
     name.to_s
   end
 
@@ -1475,8 +1511,15 @@ $ga=[]
     if ASSIGN_NODES.include? left_type then
       "(#{rhs}).match(#{lhs})"
     else
-      $gt = :Regex
-      "#{rhs}.match(#{lhs})"
+      $gt = :bool
+      if scope.is_a?(LocalScope) || (scope == $scope[0])
+
+        mi=true
+        scope.map["_q_match_data"]='MatchInfo'
+        "#{rhs}.match(#{lhs.gsub(/^\./,'')}, 0, out _q_match_data)"
+      else
+        "#{rhs}.match(#{lhs.gsub(/^\./,'')})"
+      end
     end
   end
 
@@ -1512,6 +1555,10 @@ $ga=[]
 
   def process_nth_ref(exp) # :nodoc:
     _, n = exp
+
+    return "_q_match_data.fetch(#{n})"
+    
+    
     "$#{n}"
   end
 
