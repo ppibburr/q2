@@ -2,6 +2,11 @@ require 'Q'
 require pkg: 'gtk+-3.0'
 
 class Foo
+  module Quux
+
+  end
+
+  include Quux
   #signal {
   #  def foo a
   #     p "'Im a signal!', #{a}"
@@ -51,6 +56,10 @@ namespace module Q
     def []= i,t
       # TODO: << = +=
       @_t << t
+    end
+    
+    def wt
+      return self.title
     end
     
     # TODO: resolve array member type

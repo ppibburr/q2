@@ -201,14 +201,30 @@ $sao.each do |f|
   ##  return type, full type var assigment, return of type infered from argument, most field values
 end
 
-p $scope[0].map['Foo']
-
 $req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
 $sao.unshift "./q.q"
 puts output if $v
 
 compile write
 run if $run && !$shared
+def vapi scope
+scope.map.map do |k,v|
+  if v.is_a?(Scope)
+    if v.namespace?
+      "namespace #{v.name} {"+
+        vapi(v)
+      "}"
+    elsif v.class?
+      "public class #{v.name} {"+
+        vapi(v)
+      ""
+      
+    else 
+      v.name
+    end
+  end
+end.join("\n")
+end
 
 __END__
 $: << f=File.expand_path(File.dirname("%s"))
@@ -242,7 +258,15 @@ class GLib::Object
 end
 
 def signal &b
-  GLib::Object::QGSignal.new self,&b
+  @sig||=GLib::Object::QGSignal.new self
+  o = @sig.methods
+  class << sig
+    self
+  end.class_eval &b
+  n = @sig.methods
+  s=n.find_all do |q| !o.index(q) end
+  s.each do |q| define_method q do end; end
+  @sig
 end
 
 def delegate &b

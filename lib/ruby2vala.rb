@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby -w
-
+$: << File.expand_path(File.dirname(__FILE__))
+require "ruby2vala/vapi_read"
 require "rubygems"
 require "sexp_processor"
 def f_path file
@@ -26,7 +27,14 @@ end
 
 def q_require file
   if file.is_a?(Hash)
-    $pkg << file[:pkg] unless $pkg.index(file[:pkg])
+    v=nil
+    $pkg << v=file[:pkg] unless $pkg.index(file[:pkg])
+    vapi_import v if v
+    if v
+      $m.each do |k,v|
+        $scope[0].map[k]=v
+      end
+    end
     return nil
   end
   
@@ -48,7 +56,7 @@ end
 
 class Scope
   attr_reader :map, :parent, :fields, :args
-  attr_accessor :name, :superclass, :return_type
+  attr_accessor :name, :superclass, :return_type, :is_class, :is_iface, :is_namespace, :is_root
   @@ins = []
   
   def self.find s, &b
@@ -59,7 +67,12 @@ class Scope
   def to_s!
     to_s
   end
-
+  
+  def class?; is_class;end
+  def namespace?; is_namespace;end
+  def iface?; is_iface;end
+  def root?; is_root;end
+      
   def to_s
     @rt||=return_type.to_s
   end
@@ -77,7 +90,7 @@ class Scope
 
     q=q.to_s.gsub(/\(.*?\)/,'').gsub("@",'') if q
 
-    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || (superclass ? Scope.find(superclass) do |s| s ? s.declared?(q) : nil end : nil)) if q
+    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || (superclass ? Scope.find(superclass) do |s| s ? s.declared?(q) : $scope[0].map["#{superclass}.#{q}"] end : nil)) if q
 
     return z if q =~ /\./
 
@@ -94,6 +107,8 @@ class Scope
           q=$1
           is_new?(what) ? q : :var
         when /^\"/
+          "string"
+        when /^\@\"/
           "string"
         when /^[0-9]+$/
           "int"
@@ -128,9 +143,13 @@ class Scope
       qq = (($gt.to_s != 'var') ? $gt : nil) || cs.guess_type(what) || :var
 
       self.map[q] = qq
-    end
+    
       $gt = nil
-      qq
+      return qq
+    end
+    
+    $gt=:var
+    return nil
   end
 end
 
@@ -262,7 +281,7 @@ class Ruby2Ruby < SexpProcessor
   def process_and exp # :nodoc:
     _, lhs, rhs = exp
 
-    parenthesize "#{process lhs} and #{process rhs}"
+    parenthesize "#{process lhs} && #{process rhs}"
   end
 
   def process_arglist exp # custom made node # :nodoc:
@@ -405,7 +424,7 @@ class Ruby2Ruby < SexpProcessor
       if ([:call, :lasgn].index(q=sexp[0]))
         if  q==:call
           if ![:namespace, :require, :generics, :delegate, :signal, :defn].index(sexp[2])
-            p ss: s=mb?(exp.file) if !$mb
+            s=mb?(exp.file) if !$mb
           end
         else
           s=mb?(exp.file) if  !$mb
@@ -421,7 +440,7 @@ class Ruby2Ruby < SexpProcessor
     result << "// do nothing\n" if result.empty?
     result = parenthesize result.join "\n"
     result += "\n" unless result.start_with? "("
-p result: result
+
     result
   end
 
@@ -478,6 +497,7 @@ $ga=[]
     gt = $gt
     $gt=nil
     r_args = []
+    $ns=true if name.to_s == "namespace"
     in_context :arglist do
       max = args.size - 1
 
@@ -504,6 +524,9 @@ $ga=[]
     end
     $gt = gt
     case name
+    when :=~
+      $gt=:bool
+      "#{args[0]}.match(#{receiver.gsub(/^\./,'')})"
     when *BINARY then
       if safe_call
         "#{receiver}&.#{name}(#{args.join(", ")})"
@@ -611,12 +634,15 @@ $ga=[]
 
       if ((n=name.to_s) == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
         "new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents()"
+      elsif n=="nil!"
+        $gt = receiver.to_s!.gsub(/\.$/,'')
+        "null"
       elsif (n == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
         ($DATA[File.expand_path(exp.file)] || "").inspect
       elsif (n == "require")
         s=scope
         p=$PROP
-        f=$FE
+        fe=$FE
         $PROP = nil
         $FE = nil
         $scope << $scope[0]  
@@ -628,20 +654,31 @@ $ga=[]
           $sao << f        
         end
         $scope.pop
-        $FE=f
+        $FE=fe
         $ns=ns
         $PROP=p
         ''
+      elsif n == "include"
+        $incl.push(*n_args.map do |q| q.to_s end)
+        ""
       elsif n == "Value"
         $gt=:Value
         args
       elsif n == 'each'
-        $FE = receiver
-        ("foreach (")
+        p FE: $FE = receiver
+        ("foreach (#{$FE.gsub(/\.$/,'')}")
       elsif (n == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
         ""
       elsif n == "new"
         re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{args.to_s == "" ? '()' : args}"
+
+        re
+      elsif n == "new_for_path"
+        re="#{$gt=receiver.to_s.gsub(/\.$/,'')}.new_for_path#{args.to_s == "" ? '()' : args}"
+
+        re
+      elsif n =~ /^new_/
+        re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{".#{n.gsub(/^new_/, '')}"}#{args.to_s == "" ? '()' : args}"
 
         re
       elsif n == "GenericType"
@@ -727,8 +764,9 @@ $ga=[]
           "(double)#{r}#{name}"
         end 
       elsif n == "namespace"
-        $ns = true
-        "namespace #{n_args[0]}"  
+        $ns=false
+        "namespace #{n_args[0]}"
+          
       else
         s=scope
         until !s.is_a?(LocalScope)
@@ -738,7 +776,9 @@ $ga=[]
         if m=s.declared?(name.to_s!)
           r_args.each_with_index do |q,i|
             if t=m.args[i]
+              
             else
+              q = nil if q == 'var'
               m.args << (q || scope.guess_type(n_args[i].to_s!)    )   
             end
           end if n_args && m.is_a?(Scope)
@@ -752,9 +792,9 @@ $ga=[]
         qq = "." if qq==''
         gt = $gt ? "#{$gt}." : (scope.guess_type(qq.gsub(/^\./,'').gsub(/\.$/,'')).to_s+"." || '')
         gt = '' if gt.to_s == 'var.'
-        p XXX: qq.gsub(/^\./,'').gsub(/\.$/,''), g: n
+
         gt = scope.guess_type(x=gt+n).to_s
-        p XXX3: x, s: scope.map.keys
+     
         $gt=gt
         s
       end
@@ -939,6 +979,8 @@ $ga=[]
     scope.return_type = type
     type = scope
     
+    p type: $SIG, name: name, r: type.to_s
+    
 
     dec = ((scope).map.map do |q,t|
       t=t.to_s!
@@ -956,8 +998,7 @@ $ga=[]
     $SIG = nil
     $return = false
     $scope << $scope[-2] #unless $SIG2 || $DELG2
-    p SCOPE: scope.name
-    p SCOPE2: scope.parent.name
+
     push_sig(name.to_s, type) unless $PROP 
     scope.map[name.to_s] = type
     $scope.pop #unless $SIG2 || $DELG2
@@ -977,12 +1018,12 @@ $ga=[]
      
     r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_t!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
+    $gt=nil
     r
   end
 
   def push_sig n, t
     $scope[0].map[k="#{scope.name}."+n.to_s] = t
-    p({SCOPE3: {k => t.to_s}})
   end 
 
   def process_defs exp # :nodoc:
@@ -1138,7 +1179,9 @@ $ga=[]
       if t=scope.declared?(a=lhs.gsub(/^this\./,''))
       
       else
-        t=s.assign(zq=scope.name+"."+a,(r),scope)
+        t=s.assign((zq=(scope.name+"."+a).gsub(/^\./,'')),(r),scope)
+
+        p TT: t, t: r, zq: zq
         s.fields[a]=t if b = t!=:var
         $delete << zq 
       end
@@ -1161,13 +1204,13 @@ $ga=[]
     c = "(#{c.chomp})" if c =~ /\n/
 
     if t then
+      t=process(t)
       unless expand then
         if f then
-        
-              ($open_compacted_if ||= []) << true
-            t = process t
-    f = process f
-    $open_compacted_if.pop
+          ($open_compacted_if ||= []) << true
+
+          f = process f
+          $open_compacted_if.pop
           r = "(#{c}) ? (#{t}) : (#{f})#{($open_compacted_if.length > 0) ? '' : ';'}"
           r = nil if r =~ /return/ # HACK - need contextual awareness or something
          
@@ -1184,11 +1227,12 @@ $ga=[]
 
       r
     elsif f
+      f=process(f)
       unless expand then
         r = "if (!(#{c})) { #{f};}"
         return r if (@indent + r).size < LINE_LENGTH and r !~ /\n/
       end
-      "if (!(#{c}) {\n#{indent(f)};\n}"
+      "if (!(#{c})) {\n#{indent(f)};\n}"
     else
       # empty if statement, just do it in case of side effects from condition
       "if (#{c}) {\n#{indent "// do nothing"}\n}"
@@ -1222,22 +1266,27 @@ $ga=[]
 
     is_lambda = iter.sexp_type == :lambda
 
-    iter = process iter
 
+    iter = process iter
+    is_lambda = is_lambda && ((w=iter.strip) !~ /^foreach \(/)
+    p lam: is_lambda
+    $FE = ((w=iter.strip) =~ /^foreach \(/)
     $scope << $scope[-2] if ($PROP && !$PROP.empty?)# || $SIG2 || $DELG2   
     body = process body if body
     $scope.pop if ($PROP && !$PROP.empty?) #|| $SIG2 || $DELG2
-    
-    p scope: scope.name
-
+    $FE = ((w=iter.strip) =~ /^foreach \(/)
     args = case
            when args == 0 then
              ""
-           when is_lambda then
+           when is_lambda && !$FE then
              " (#{process(args)[1..-2]}) => "
            else
-             if iter.strip == "foreach ("
-               "var #{process(args)[1..-2][0]} in #{$FE.gsub(/\.$/,'')} ) "
+             if (w=iter.strip) =~ /^foreach \((.*)/
+               w=w.split("(")[1]
+               fe=$1.gsub(/\.$/,'')
+               p iter: iter
+               iter = "foreach ("
+               "var #{process(args)[1..-2]} in #{fe} ) "
              else
                " #{process(args)[1..-2]}"
              end
@@ -1273,7 +1322,7 @@ $ga=[]
     if $PROP || $SIG2 || $DELG2
       q="#{iter.to_s! % t=body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {\n","\nget {").gsub("set() {\n", "\nset {").strip.split("\n")
       qq=""
-      p QQQ: iter
+  
       i=-1
       a = ($PROP || (($SIG2 || $DELG2) ? [] : nil)) 
       a.each do |q|
@@ -1346,7 +1395,7 @@ $ga=[]
     _, name, value = exp
 
     s=""
-    if (t= (scope.assign(name, pv=process(value)))) == :var
+    if (t= (scope.assign(name, pv=process(value)))).to_s! == 'var'
 
 
      s += "var "
@@ -1362,6 +1411,9 @@ $ga=[]
     case obj
     when Range then
       "(#{obj.inspect})"
+    when Regexp 
+      $gt = 'Regex'
+      obj.inspect
     else
       obj.inspect
     end
@@ -1410,7 +1462,7 @@ $ga=[]
     lhs = process lhs
     rhs = process rhs
 
-    "#{lhs} =~ #{rhs}"
+    "#{lhs}.match(#{rhs})"
   end
 
   def process_match3 exp # :nodoc:
@@ -1421,19 +1473,21 @@ $ga=[]
     rhs = process rhs
 
     if ASSIGN_NODES.include? left_type then
-      "(#{lhs}) =~ #{rhs}"
+      "(#{rhs}).match(#{lhs})"
     else
-      "#{lhs} =~ #{rhs}"
+      $gt = :Regex
+      "#{rhs}.match(#{lhs})"
     end
   end
 
   def process_module(exp) # :nodoc:
     if !$ns
-      "#{exp.comments}iface #{util_module_or_class(exp)}"
+      r="#{exp.comments}public interface #{util_module_or_class(exp)}"
     else
-       $ns=false
-      "#{util_module_or_class(exp)}"
+      r="#{exp.comments}#{util_module_or_class(exp)}"
     end
+   
+    r
   end
 
   def process_next(exp) # :nodoc:
@@ -1458,7 +1512,7 @@ $ga=[]
 
   def process_nth_ref(exp) # :nodoc:
     _, n = exp
-    "$#{n}qq"
+    "$#{n}"
   end
 
   # TODO: Infer
@@ -1655,6 +1709,7 @@ $ga=[]
 
   def process_str(exp) # :nodoc:
     _, s = exp
+    p FE: exp
     s.dump
   end
 
@@ -1949,7 +2004,10 @@ $ga=[]
   # Utility method to generate ether a module or class.
 
   def util_module_or_class exp, is_class = false
-    $scope << Scope.new(scope)
+    $scope << s=Scope.new(scope)
+    $SIG=nil
+    s.is_class = is_class
+    s.is_iface = !is_class
     
     result = []
 
@@ -1968,18 +2026,21 @@ $ga=[]
     result << name
     result << "<#{$generics.join(", ")}>" if $klass && $generics
 
+    $incl=[];
     if superk then
       superk = process superk
-      result << " : #{superk}" if superk
+      $incl << superk if superk
       scope.superclass = superk if superk
     end
 
-    result << " {\n"
+    q="%s {\n"
 
     body = body.map { |sexp|
       process(sexp).chomp
     }
-
+    
+    result << (q % ("#{$incl.empty? ? '' : " : "}"+$incl.join(", "))) 
+$incl = []
     body = unless body.empty? then
              indent(fmt_body(body.find_all do |q| q end.map do |q| (q.strip =~ /^\}$/) ? q+"\n" : q end.join("\n"))) + "\n"
            else
@@ -1989,6 +2050,7 @@ $ga=[]
       result << indent("// Fields set to infered type via @<var> assignment!\n")+"\n"
     
       scope.fields.each do |k,v|
+        p field: k, v: v
         pri = (k.to_s! =~ /^\_/)
         result << indent("#{pri ? "private" : "public"} #{v} #{k};\n")+"\n"
       end
