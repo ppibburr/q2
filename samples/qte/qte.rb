@@ -5,24 +5,28 @@ namespace module QTe
   class App
     defn ['string[]']
     def initialize argv
-        Gtk.init(ref argv)      
-        pid = :Pid?.nil!
-        @w = Gtk::Window.new(Gtk::WindowType::TOPLEVEL);
-        #//create the new terminal
-        @term = QTe::Terminal.new()
-        term.child_exited.connect() do Gtk.main_quit() end
-        term.spawn(["/usr/bin/bash"])
-        w.add(term);
-        w.show_all()
-        Gtk.main()
+      Gtk.init(ref argv)      
+      Window.new().term.child_exited.connect() do Gtk.main_quit() end  
+      Gtk.main()
     end
+  end
+  
+  class Window < Gtk::Window
+    def initialize
+      #//create the new terminal
+      @term = QTe::Terminal.new()
+      term.spawn(["/usr/bin/bash"])
+      term.child_exited.connect() do destroy() end
+      add(term);
+      show_all() 
+    end  
   end
   
   class Terminal < Vte::Terminal
     defn [:string[]]
     def spawn(a)
       pid = :Pid?.nil!
-      spawn_sync(Vte::PtyFlags::DEFAULT,nil,a,nil, SpawnFlags::DO_NOT_REAP_CHILD,nil,out(pid),nil)
+      spawn_sync(Vte::PtyFlags::DEFAULT,nil,a,Environ.get(), SpawnFlags::DO_NOT_REAP_CHILD,nil,out(pid),nil)
       return pid
     end
   end

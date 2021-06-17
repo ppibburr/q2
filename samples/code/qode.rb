@@ -16,26 +16,37 @@ namespace module Qode
 
       @menu_bar = Gtk::MenuBar.new();
      
-      @item_file = Gtk::MenuItem.new_with_label("File");
+      @item_file = Gtk::MenuItem.new_with_mnemonic("_File");
       menu_bar.add(@item_file);
+
+      @item_build = Gtk::MenuItem.new_with_label("Build");
+      menu_bar.add(@item_build);
 
       @file_menu = Gtk.Menu.new();
       item_file.set_submenu(@file_menu);
 
+      @build_menu = Gtk.Menu.new();
+      item_build.set_submenu(@build_menu);
+
       @item_open = Gtk.MenuItem.new_with_label("Open");
       file_menu.add(item_open);
 
-      @item_save = Gtk.MenuItem.new_with_label("Save");
+      @item_save = Gtk.MenuItem.new_with_mnemonic("_Save");
       file_menu.add(item_save);
 
-      @item_compile = Gtk.MenuItem.new_with_label("compile");
-      file_menu.add(item_compile);
+      @item_compile = Gtk.MenuItem.new_with_mnemonic("_Compile");
+      build_menu.add(item_compile);
       
-      @item_run = Gtk.MenuItem.new_with_label("Run Compile");
-      file_menu.add(item_run);      
+      @item_run = Gtk.MenuItem.new_with_mnemonic("_Run Compile");
+      build_menu.add(item_run);      
 
-      @item_quit = Gtk.MenuItem.new_with_label("Quit");
+      @item_quit = Gtk.MenuItem.new_with_mnemonic("_Quit");
       file_menu.add(item_quit);
+
+      accel_group = Gtk::AccelGroup.new();
+      add_accel_group(accel_group); 
+      item_save.add_accelerator("activate", accel_group, `'S'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
+      item_run.add_accelerator("activate", accel_group, `'R'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
 
       @source_view = Gtk::SourceView.new();
       source_view.set_wrap_mode(Gtk::WrapMode::WORD);
@@ -47,6 +58,8 @@ namespace module Qode
       source_view.indent_width = 2
       source_view.highlight_current_line = true
       source_view.auto_indent = true
+
+      `(source_view.buffer as Gtk.SourceBuffer)`.style_scheme = Gtk::SourceStyleSchemeManager.get_default().get_scheme('kate')
      
       @language_manager = Gtk::SourceLanguageManager.get_default();
 
@@ -181,6 +194,7 @@ namespace module Qode
       menu.show_all();
     end
   
+    defn [:string]
     def system c
       stdout = :string.nil!;
       stderr = :string.nil!;
@@ -196,12 +210,15 @@ namespace module Qode
     end
     
     def compile
-      system "q #{file.location.get_path()} &"
+      on_save()
+      QTe::Window.new().term.spawn(["/home/control/git/q2/bin/q","#{file.location.get_path()}"])
     end
     
     def run
-      compile()
-      system "./#{file.location.get_basename().split(".")[0]}"
+      on_save()
+      t=QTe::Window.new().term
+      t.spawn(["/bin/sh"])
+      t.feed_child("q #{file.location.get_path()} -r && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)
     end
   end
 end

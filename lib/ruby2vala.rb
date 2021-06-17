@@ -16,7 +16,7 @@ def f_path file
     if File.exist?(f=File.expand_path("#{File.dirname(__FILE__)}/../samples/"+file))
       return f
     end
-    p f
+  
     raise "Q - No such file: #{file}"
   end
 end
@@ -691,7 +691,7 @@ $ga=[]
         $gt=:Value
         args
       elsif n == 'each'
-        p FE: $FE = receiver
+        $FE = receiver
         ("foreach (#{$FE.gsub(/\.$/,'')}")
       elsif (n == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
         ""
@@ -1004,9 +1004,6 @@ $ga=[]
     type = $SIG[1] if $SIG && $SIG[1]
     scope.return_type = type
     type = scope
-    
-    p type: $SIG, name: name, r: type.to_s
-    
 
     dec = ((scope).map.map do |q,t|
       t=t.to_s!
@@ -1217,7 +1214,7 @@ $ga=[]
       else
         t=s.assign((zq=(scope.name+"."+a).gsub(/^\./,'')),(r),scope)
 
-        p TT: t, t: r, zq: zq
+ 
         s.fields[a]=t if b = t!=:var
         $delete << zq 
       end
@@ -1305,7 +1302,7 @@ $ga=[]
 
     iter = process iter
     is_lambda = is_lambda && ((w=iter.strip) !~ /^foreach \(/)
-    p lam: is_lambda
+
     $FE = ((w=iter.strip) =~ /^foreach \(/)
     $scope << $scope[-2] if ($PROP && !$PROP.empty?)# || $SIG2 || $DELG2   
     body = process body if body
@@ -1320,7 +1317,7 @@ $ga=[]
              if (w=iter.strip) =~ /^foreach \((.*)/
                w=w.split("(")[1]
                fe=$1.gsub(/\.$/,'')
-               p iter: iter
+
                iter = "foreach ("
                "var #{process(args)[1..-2]} in #{fe} ) "
              else
@@ -1756,7 +1753,7 @@ $ga=[]
 
   def process_str(exp) # :nodoc:
     _, s = exp
-    p FE: exp
+
     s.dump
   end
 
@@ -2097,7 +2094,7 @@ $incl = []
       result << indent("// Fields set to infered type via @<var> assignment!\n")+"\n"
     
       scope.fields.each do |k,v|
-        p field: k, v: v
+
         pri = (k.to_s! =~ /^\_/)
         result << indent("#{pri ? "private" : "public"} #{v} #{k};\n")+"\n"
       end

@@ -1,6 +1,7 @@
 require pkg: 'gtk+-3.0'
 require pkg: 'webkit2gtk-4.0'
 
+#
 class ValaBrowser < Gtk::Window
     def initialize()
         @default_protto = "http"
