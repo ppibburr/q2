@@ -804,8 +804,11 @@ $ga=[]
             if t=m.args[i]
               
             else
-              q = nil if q == 'var'
-              m.args << (q || scope.guess_type(n_args[i].to_s!)    )   
+             
+              q = nil if q.to_s == 'var'
+              q ||= scope.guess_type(n_args[i].to_s!)
+              q = nil if q.to_s == 'var'
+              m.args << (q)   
             end
           end if n_args && m.is_a?(Scope)
         end
@@ -983,7 +986,7 @@ $ga=[]
     args = "()" if (!args) || (args=='')
     args=args.gsub(/\(|\)/,'').split(",")
     i=-1
-    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t unless scope.declared?(q);x; end.join(", ")+")" if args!="()"    
+    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t if (t.to_s != 'var') && !scope.declared?(q);x; end.join(", ")+")" if args!="()"    
     args.gsub("  ", " ")
 
     body = body.map { |ssexp|
