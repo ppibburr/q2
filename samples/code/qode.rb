@@ -2,6 +2,7 @@ require pkg: 'gtk+-3.0'
 require pkg: 'gtksourceview-3.0'
 
 require 'qte/qte.rb'
+require 'code/edit.rb'
 
 namespace module Qode
   class Editor < Gtk.Window
@@ -48,27 +49,13 @@ namespace module Qode
       item_save.add_accelerator("activate", accel_group, `'S'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
       item_run.add_accelerator("activate", accel_group, `'R'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
 
-      @source_view = Gtk::SourceView.new();
-      source_view.set_wrap_mode(Gtk::WrapMode::WORD);
-      source_view.buffer.text = "";
-     
-      source_view.show_line_numbers = true
-      source_view.show_line_marks   = true
-      source_view.insert_spaces_instead_of_tabs = true
-      source_view.indent_width = 2
-      source_view.highlight_current_line = true
-      source_view.auto_indent = true
-
-      `(source_view.buffer as Gtk.SourceBuffer)`.style_scheme = Gtk::SourceStyleSchemeManager.get_default().get_scheme('kate')
-     
-      @language_manager = Gtk::SourceLanguageManager.get_default();
-
+      @edit = EditView.new();
 
       @paned = Gtk::Paned.new(Gtk::Orientation::VERTICAL)
 
       scrolled_window = Gtk::ScrolledWindow.new(nil, nil);
       scrolled_window.set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC);
-      scrolled_window.add(source_view);
+      scrolled_window.add(edit);
       paned.hexpand = true;
       paned.vexpand = true;
 
@@ -109,7 +96,7 @@ namespace module Qode
       end
 
       # *Populate the contextual menu after the right click. We need to select a language for our sourceview.
-      source_view.populate_popup.connect(on_populate_menu);
+      edit.populate_popup.connect(on_populate_menu);
     end
 
     # * We will select a file using FileChooser and load it to the editor.
@@ -136,9 +123,9 @@ namespace module Qode
 
         @title = "#{app_name} | #{file.location.get_path()}"
 
-        file_loader = Gtk.SourceFileLoader.new(`source_view.buffer as Gtk.SourceBuffer`, file);         
+        file_loader = Gtk.SourceFileLoader.new(edit.source_buffer, file);         
         file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
-        `(source_view.buffer as Gtk.SourceBuffer).set_language(language_manager.guess_language(file.location.get_path(),null));`
+        edit.source_buffer.set_language(edit.language_manager.guess_language(file.location.get_path(),nil))
         vte.feed_child("cd #{File.dirname(file.location.get_path())}\n".data)
       end    
     end
@@ -147,7 +134,7 @@ namespace module Qode
     # *It doesn't consider the case where you didn't "select" a file before.
     def on_save()
       if (file != nil && !file.is_readonly())
-        file_saver = Gtk.SourceFileSaver.new(`source_view.buffer as Gtk.SourceBuffer`, file);
+        file_saver = Gtk.SourceFileSaver.new(edit.source_buffer, file);
         file_saver.save_async.begin(Priority::DEFAULT, nil, nil);
       end
     end
@@ -166,25 +153,25 @@ namespace module Qode
       item.set_label("Normal Text");
       item.toggled.connect() do
          #//No language, aka normal text edit.
-         `(source_view.buffer as Gtk.SourceBuffer).set_language (null);`
+         `(edit.buffer as Gtk.SourceBuffer).set_language (null);`
       end
 
       submenu.add(item);
 
       #// Set the Language entries
-      language_manager.get_language_ids().each do |id|
-        lang = language_manager.get_language(id);
+      edit.language_manager.get_language_ids().each do |id|
+        lang = edit.language_manager.get_language(id);
 
         item = Gtk::RadioMenuItem.new(item.get_group());
         item.set_label(lang.name);
 
         submenu.add(item);
         item.toggled.connect() do
-          `(source_view.buffer as Gtk.SourceBuffer).set_language(lang);`
+          edit.source_buffer.set_language(lang);
         end
 
         #// Active item
-        if (`(source_view.buffer as Gtk.SourceBuffer).language != null` && `id == (source_view.buffer as Gtk.SourceBuffer).language.id`)
+        if ((edit.source_buffer.language != null) && (id == edit.source_buffer.language.id))
           item.active = true;
         end
       end
