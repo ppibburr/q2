@@ -87,7 +87,6 @@ namespace module Documents
     
     attr_reader(:active) {:int}
     attr_reader(:list) {:Doc[]}
-    attr_reader(:size) {:int}
     
     def cycle;
       if @active < @list.length-1
