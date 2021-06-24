@@ -19,6 +19,8 @@ end
 
 $i = ARGV.delete("-i")
 
+$CTAGS = [] if ARGV.delete("--ctags")
+
 $run = ARGV.delete("-r")
 $exe = ARGV.index("-e")
 ARGV.delete_at $exe if $exe
@@ -145,7 +147,10 @@ $req = {}
 
 ## One pass transpilation, requires more strict typing
 # puts $one;exit
-
+if $CTAGS
+  puts($CTAGS.join("\n"))
+  exit
+end
 File.open("./types.rbm", "w") do |f|
   f.puts Marshal.dump($scope[0])
 end

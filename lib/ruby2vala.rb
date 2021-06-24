@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby -w
+
 $: << File.expand_path(File.dirname(__FILE__))
 require "ruby2vala/vapi_read"
 require "rubygems"
@@ -668,6 +669,7 @@ $ga=[]
       elsif (n == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
         ($DATA[File.expand_path(exp.file)] || "").inspect
       elsif (n == "require")
+        return "" if $CTAGS
         s=scope
         p=$PROP
         fe=$FE
@@ -1037,6 +1039,7 @@ $ga=[]
 
     push_sig(name.to_s, type) unless $PROP 
     scope.map[name.to_s] = type
+    $CTAGS << [name.to_s, exp.line] if $CTAGS
     $scope.pop #unless $SIG2 || $DELG2
     type=type.to_s!
     i=-1
@@ -2074,7 +2077,7 @@ $ga=[]
     
     scope.parent.map[name.to_s] = scope
     
-
+    $CTAGS << [name.to_s, exp.line]
     
     result << name
     result << "<#{$generics.join(", ")}>" if $klass && $generics
