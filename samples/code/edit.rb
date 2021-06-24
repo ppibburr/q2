@@ -136,6 +136,9 @@ namespace module Qode
       @highlight_current_line = true
       @auto_indent = true
 
+      @_scheme = 0
+      @_scheme = -1
+
       source_buffer.style_scheme = Gtk::SourceStyleSchemeManager.get_default().get_scheme('kate')
      
       @language_manager = Gtk::SourceLanguageManager.get_default();
@@ -150,13 +153,26 @@ namespace module Qode
       end
     end
 
-    def connect_keys()
-      # change_number.connect() do puts "WHY" end
-    
-      key_press_event.connect() do |event|
-        if ((event.key.state & Gtk.accelerator_get_default_mod_mask()) == (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK))
-    
-        end
+  def cycle_theme()
+    @_scheme = @_scheme+1
+    sm=Gtk::SourceStyleSchemeManager.get_default()
+    ids=sm.get_scheme_ids()
+    @_scheme = 0 if @_scheme >= ids.length    
+    id = ids[@_scheme]
+    p "id: #{id}"
+    source_buffer.style_scheme = sm.get_scheme(id)
+  end
+
+  def connect_keys()
+    # change_number.connect() do puts "WHY" end
+  
+    key_press_event.connect() do |event|
+      if ((event.key.state & Gtk.accelerator_get_default_mod_mask()) == (Gdk::ModifierType::CONTROL_MASK | Gdk::ModifierType::SHIFT_MASK))
+        if event.key.keyval == Gdk::Key::T
+          cycle_theme()
+            next true
+         end
+      end
 
         if ((event.key.state & Gtk.accelerator_get_default_mod_mask()) == Gdk::ModifierType::CONTROL_MASK)
           if event.key.keyval == Gdk::Key::f

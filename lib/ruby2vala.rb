@@ -505,6 +505,7 @@ $ga=[]
     $gt=nil
     r_args = []
     $ns=true if name.to_s == "namespace"
+    $NS = true if(name.to_s == "namespace")
     in_context :arglist do
       max = args.size - 1
 
@@ -529,6 +530,7 @@ $ga=[]
         arg
       }.compact
     end
+    $NS=false
     $gt = gt
     case name
     when :join
@@ -684,6 +686,14 @@ $ga=[]
         $ns=ns
         $PROP=p
         ''
+      elsif n == "index"
+        $gt = :int
+        """
+        var #{v="q_array_index"} = -1
+        foreach (var #{v}_q in #{r=receiver.to_s!}) {
+          #{v}++;
+        }
+        """
       elsif n == "include"
         $incl.push(*n_args.map do |q| q.to_s end)
         ""
@@ -747,23 +757,23 @@ $ga=[]
         else
           push_sig n_args[0].to_s!, n_args[1].to_s!
           push_sig "_"+n_args[0].to_s!, n_args[1].to_s!
-          "private #{n_args[1].to_s!} _#{n_args[0].to_s!};\n"+
+          (scope.iface? ? '' : "private #{n_args[1].to_s!} _#{n_args[0].to_s!};\n")+
           ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
         end
       elsif n == "attr_accessor"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
-          ("public %s #{a} { get; set; }")
+          ("public #{scope.iface? ? 'abstract ' : ''}%s #{a} { get; set; }")
         end.join("\n")
       elsif n == "attr_reader"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
-          ("public %s #{a} { get; }")
+          ("public #{scope.iface? ? 'abstract ' : ''}%s #{a} { get; #{scope.iface? ? '' : '' }}")
         end.join("\n")
       elsif n == "attr_writer"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
-          ("public %s #{a} { set; }")
+          ("public #{scope.iface? ? 'abstract ' : ''}%s #{a} { set; }")
         end.join("\n")        
       elsif n == "to_s"
         $gt=:string
@@ -790,7 +800,6 @@ $ga=[]
           "(double)#{r}#{name}"
         end 
       elsif n == "namespace"
-        $ns=false
         "namespace #{n_args[0]}"
           
       else
@@ -974,6 +983,7 @@ $ga=[]
 
     static = name =~ /^this\./
     name = name.to_s.split(".")[-1]
+    scope.name = name
 
 
     m_args = rs = $scope[0].map["#{scope.parent.name}.#{name.to_s}"]
@@ -1018,7 +1028,7 @@ $ga=[]
       next "" if l.index(q.to_s!.split("=")[0].strip)
       next "" if l.index(q.to_s!)
       next "" if l.index(q.to_s!.strip)
-      t == 'var' ? '' : indent("#{t.to_s!} #{q};\n")
+      t == 'var' ? '' : indent("#{t.to_s!} #{q}#{t.to_s! =~ /\[/ ? ' = {}' : ''};\n")
     end.join+"\n") unless scope.parent.is_a?(LocalScope)
 
     $SIG = nil
@@ -1072,7 +1082,7 @@ $ga=[]
   def process_dot2(exp) # :nodoc:
     _, lhs, rhs = exp
 
-    "(#{process lhs}:#{process rhs})"
+    "#{process lhs}:#{process rhs}"
   end
 
   def process_dot3(exp) # :nodoc:
@@ -1132,7 +1142,7 @@ $ga=[]
   def process_flip2 exp # :nodoc:
     _, lhs, rhs = exp
 
-    "#{process lhs}..#{process rhs}"
+    "#{process lhs}:#{process rhs}"
   end
 
   def process_flip3 exp # :nodoc:
@@ -1446,7 +1456,7 @@ $ga=[]
     _, obj = exp
     case obj
     when Range then
-      "(#{obj.inspect})"
+      "#{obj.inspect.gsub("..",':')}"
     when Regexp 
       $gt = 'Regex'
       obj.inspect
@@ -1524,13 +1534,9 @@ $ga=[]
   end
 
   def process_module(exp) # :nodoc:
-    if !$ns
-      r="#{exp.comments}public interface #{util_module_or_class(exp)}"
-    else
-      r="#{exp.comments}#{util_module_or_class(exp)}"
-    end
-   
-    r
+    q=$NS ? '' : 'public interface '
+    $NS=false
+    "#{exp.comments}#{q}#{util_module_or_class(exp)}" 
   end
 
   def process_next(exp) # :nodoc:
@@ -1767,7 +1773,7 @@ $ga=[]
       process arg
     }
 
-    "super(#{args.join ", "})"
+    "base.#{$scope[-1].name}(#{args.join ", "})"
   end
 
   def process_svalue(exp) # :nodoc:

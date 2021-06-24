@@ -153,7 +153,7 @@ namespace module Qode
       item.set_label("Normal Text");
       item.toggled.connect() do
          #//No language, aka normal text edit.
-         `(edit.buffer as Gtk.SourceBuffer).set_language (null);`
+         @edit.source_buffer.set_language(nil)
       end
 
       submenu.add(item);
@@ -197,8 +197,9 @@ namespace module Qode
     end
     
     def compile
-      on_save()
-      QTe::Window.new().term.spawn(["/home/control/git/q2/bin/q","#{file.location.get_path()}"])
+      t=QTe::Window.new().term
+      t.spawn(["/bin/sh"])
+      t.feed_child("q #{file.location.get_path()} && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)
     end
     
     def run
