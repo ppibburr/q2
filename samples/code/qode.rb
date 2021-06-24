@@ -1,10 +1,36 @@
 require pkg: 'gtk+-3.0'
 require pkg: 'gtksourceview-3.0'
 
+require 'documents/doc.rb'
 require 'qte/qte.rb'
 require 'code/edit.rb'
 
 namespace module Qode
+ class Document < Gtk::ScrolledWindow
+    include Documents::Doc
+    attr_accessor(:name) {:string?}
+    attr_accessor(:resource) {:string?}
+    attr_reader(:view) {:EditView}
+    
+    def initialize
+      set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC);
+      @_view = EditView.new()
+      add(view);    
+    end
+       
+    defn [:string]
+    def open_file(f)
+        @file = Gtk::SourceFile.new()
+        @file.location = `File.new_for_path(f)`
+
+        view.source_buffer.set_language(view.language_manager.guess_language(@name,nil))       
+
+        file_loader = Gtk.SourceFileLoader.new(view.source_buffer, file);         
+        file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
+        show_all()
+    end
+  end
+  
   class Editor < Gtk.Window
     defn [:string?]
     def initialize(f)
@@ -49,17 +75,21 @@ namespace module Qode
       item_save.add_accelerator("activate", accel_group, `'S'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
       item_run.add_accelerator("activate", accel_group, `'R'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
 
-      @edit = EditView.new();
-
       @paned = Gtk::Paned.new(Gtk::Orientation::VERTICAL)
-
-      scrolled_window = Gtk::ScrolledWindow.new(nil, nil);
-      scrolled_window.set_policy(Gtk::PolicyType::AUTOMATIC, Gtk::PolicyType::AUTOMATIC);
-      scrolled_window.add(edit);
+      @m = Documents::MyMGR.new()
+      @m.added.connect() do |d|
+      p "Added: #{d.name}"
+        ev = `((Document)d)`
+        ev.open_file(d.name)
+        ev.view.populate_popup.connect(on_populate_menu);
+        @title = "#{app_name} | #{ev.file.location.get_path()}"
+        vte.feed_child("cd #{File.dirname(ev.file.location.get_path())}\n".data)        
+      end
+      
       paned.hexpand = true;
       paned.vexpand = true;
 
-      paned.add1(scrolled_window)
+      paned.add1(m)
 
       @vte = QTe::Terminal.new()
       vte.spawn(["/usr/bin/bash"])
@@ -96,7 +126,6 @@ namespace module Qode
       end
 
       # *Populate the contextual menu after the right click. We need to select a language for our sourceview.
-      edit.populate_popup.connect(on_populate_menu);
     end
 
     # * We will select a file using FileChooser and load it to the editor.
@@ -117,24 +146,18 @@ namespace module Qode
     
     def do_open(f)
       if f != nil
-        @file = Gtk::SourceFile.new()
        # TODO: 'file.foo .* file()' triggers `file.foo() .*` 
-        @file.location = f;
-
-        @title = "#{app_name} | #{file.location.get_path()}"
-
-        file_loader = Gtk.SourceFileLoader.new(edit.source_buffer, file);         
-        file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
-        edit.source_buffer.set_language(edit.language_manager.guess_language(file.location.get_path(),nil))
-        vte.feed_child("cd #{File.dirname(file.location.get_path())}\n".data)
+        @m[f.get_path()] = Document.new()
       end    
     end
 
     # *This will save the file to the location we had defined before.
     # *It doesn't consider the case where you didn't "select" a file before.
     def on_save()
+      edit = `(Document)m.list[m.active]`
+      file = edit.file
       if (file != nil && !file.is_readonly())
-        file_saver = Gtk.SourceFileSaver.new(edit.source_buffer, file);
+        file_saver = Gtk.SourceFileSaver.new(edit.view.source_buffer, file);
         file_saver.save_async.begin(Priority::DEFAULT, nil, nil);
       end
     end
@@ -142,6 +165,7 @@ namespace module Qode
     #* Create the submenu to select language for our source view, using the right-click contextual menu
     defn [Gtk::Menu]
     def on_populate_menu(menu)
+      edit = `(Document)m.list[m.active]`
       language_menu = Gtk::MenuItem.new()
       language_menu.set_label("Language")
 
@@ -153,25 +177,25 @@ namespace module Qode
       item.set_label("Normal Text");
       item.toggled.connect() do
          #//No language, aka normal text edit.
-         @edit.source_buffer.set_language(nil)
+         edit.view.source_buffer.set_language(nil)
       end
 
       submenu.add(item);
 
       #// Set the Language entries
-      edit.language_manager.get_language_ids().each do |id|
-        lang = edit.language_manager.get_language(id);
+      edit.view.language_manager.get_language_ids().each do |id|
+        lang = edit.view.language_manager.get_language(id);
 
         item = Gtk::RadioMenuItem.new(item.get_group());
         item.set_label(lang.name);
 
         submenu.add(item);
         item.toggled.connect() do
-          edit.source_buffer.set_language(lang);
+          edit.view.source_buffer.set_language(lang);
         end
 
         #// Active item
-        if ((edit.source_buffer.language != null) && (id == edit.source_buffer.language.id))
+        if ((edit.view.source_buffer.language != null) && (id == edit.view.source_buffer.language.id))
           item.active = true;
         end
       end
@@ -197,16 +221,18 @@ namespace module Qode
     end
     
     def compile
+      ev = `(Document)m.list[m.active]`
       t=QTe::Window.new().term
       t.spawn(["/bin/sh"])
-      t.feed_child("q #{file.location.get_path()} && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)
+      t.feed_child("q #{ev.file.location.get_path()} && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)
     end
     
     def run
+      ev = `(Document)m.list[m.active]`
       on_save()
       t=QTe::Window.new().term
       t.spawn(["/bin/sh"])
-      t.feed_child("q #{file.location.get_path()} -r && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)
+      t.feed_child("q #{ev.file.location.get_path()} -r && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)
     end
   end
 end

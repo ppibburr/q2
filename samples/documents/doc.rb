@@ -176,7 +176,7 @@ namespace module Documents
   end
   
   defn [:string[]]
-  def self.main args
+  def self.test args
     Gtk.init(ref(args))
     
     m=MyMGR.new()
