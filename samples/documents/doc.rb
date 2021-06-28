@@ -44,27 +44,27 @@ namespace module Documents
     include Object
     
     defn [:string],:int
-    def find n
+    def find r
       i = 0
       @list.each do |d|
-        return i if d.name==n  
+        return i if d.resource==r  
         i = i+1
       end
       return -1    
     end
     
     defn [:string],:Doc?
-    def [] n
-      i = find(n)
+    def [] r
+      i = find(r)
       return @list[i] if i >= 0
       return nil
     end
     
     defn [:string, :Doc]
-    def []= n,d
-      d.name = n
+    def []= r,d
+      d.resource = r
     
-      i = find(n)
+      i = find(r)
       if i >= 0
         @list[i] = d
       else
@@ -163,8 +163,18 @@ namespace module Documents
       end
       
       changed.connect() do |d|
-        @_active = find(d.name)
-        @page = @active
+        q = find(d.resource)
+        
+        if q >= 0
+          @_active = q
+          @page = @active if @page != @active
+        end
+      end
+      
+      switch_page.connect() do |pg, i|
+        if @list[i] != nil
+          @list[i].activate() if i != @active
+        end
       end
     end
   end 

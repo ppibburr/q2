@@ -23,7 +23,7 @@ namespace module Qode
         @file = Gtk::SourceFile.new()
         @file.location = `File.new_for_path(f)`
 
-        view.source_buffer.set_language(view.language_manager.guess_language(@name,nil))       
+        view.source_buffer.set_language(view.language_manager.guess_language(@resource,nil))       
 
         file_loader = Gtk.SourceFileLoader.new(view.source_buffer, file);         
         file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
@@ -78,12 +78,16 @@ namespace module Qode
       @paned = Gtk::Paned.new(Gtk::Orientation::VERTICAL)
       @m = Documents::MyMGR.new()
       @m.added.connect() do |d|
-      p "Added: #{d.name}"
+        p "Added: #{d.name}"
         ev = `((Document)d)`
-        ev.open_file(d.name)
+        ev.open_file(d.resource)
         ev.view.populate_popup.connect(on_populate_menu);
         @title = "#{app_name} | #{ev.file.location.get_path()}"
         vte.feed_child("cd #{File.dirname(ev.file.location.get_path())}\n".data)        
+      end
+      
+      @m.changed.connect() do |d|
+        @title = d.name
       end
       
       paned.hexpand = true;
@@ -147,7 +151,10 @@ namespace module Qode
     def do_open(f)
       if f != nil
        # TODO: 'file.foo .* file()' triggers `file.foo() .*` 
-        @m[f.get_path()] = Document.new()
+        d=Document.new()
+        d.name = File.basename(f.get_path())
+        @m[f.get_path()] = d
+        
       end    
     end
 

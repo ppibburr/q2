@@ -2077,7 +2077,7 @@ $ga=[]
     
     scope.parent.map[name.to_s] = scope
     
-    $CTAGS << [name.to_s, exp.line]
+    $CTAGS << [name.to_s, exp.line] if $CTAGS
     
     result << name
     result << "<#{$generics.join(", ")}>" if $klass && $generics
