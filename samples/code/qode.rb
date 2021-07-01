@@ -18,7 +18,6 @@ namespace module Qode
       add(view);    
     end
        
-    defn [:string]
     def open_file(f)
         @file = Gtk::SourceFile.new()
         @file.location = `File.new_for_path(f)`
@@ -72,15 +71,17 @@ namespace module Qode
 
       accel_group = Gtk::AccelGroup.new();
       add_accel_group(accel_group); 
+      
       item_save.add_accelerator("activate", accel_group, `'S'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
       item_run.add_accelerator("activate", accel_group, `'R'`, Gdk::ModifierType::CONTROL_MASK, Gtk::AccelFlags::VISIBLE);
 
       @paned = Gtk::Paned.new(Gtk::Orientation::VERTICAL)
       @m = Documents::MyMGR.new()
+      
       @m.added.connect() do |d|
         p "Added: #{d.name}"
-        ev = `((Document)d)`
-        ev.open_file(d.resource)
+        ev = :Document.cast!(d)
+        ev.open_file(ev.resource)
         ev.view.populate_popup.connect(on_populate_menu);
         @title = "#{app_name} | #{ev.file.location.get_path()}"
         vte.feed_child("cd #{File.dirname(ev.file.location.get_path())}\n".data)        
@@ -211,24 +212,10 @@ namespace module Qode
       menu.add(language_menu);
       menu.show_all();
     end
-  
-    defn [:string]
-    def system c
-      stdout = :string.nil!;
-      stderr = :string.nil!;
-      status = :int?.nil!;
-
-    
-      Process.spawn_command_line_sync(c,
-                                    out(stdout),
-                                    out(stderr),
-                                    out(status));
-      puts stdout
-      puts "exited: #{status}"    
-    end
-    
+      
     def compile
       ev = `(Document)m.list[m.active]`
+      on_save()
       t=QTe::Window.new().term
       t.spawn(["/bin/sh"])
       t.feed_child("q #{ev.file.location.get_path()} && ruby -e 'puts :type_enter_to_exit;gets;' && exit\n".data)

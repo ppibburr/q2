@@ -101,7 +101,9 @@ class Scope
 
     z || (("#{self.name}.#{q}" != q) ? declared?("#{self.name}.#{q}") : nil)
   end
-  
+  def get q
+    declared? q
+  end
   def guess_type(what)
       what=what.to_s!
       if t=declared?(what)  
@@ -294,6 +296,9 @@ class Ruby2Ruby < SexpProcessor
 
     args.map { |arg|
       code = process arg
+      
+      $gta = "#{scope.guess_type(code).to_s!.to_t!}[]" 
+
       arg.sexp_type == :rescue ? "(#{code})" : code
     }.join ", "
   end
@@ -349,7 +354,11 @@ class Ruby2Ruby < SexpProcessor
   end
 
   def process_array exp # :nodoc:
-    "{#{process_arglist exp}}"
+    
+    r="{#{process_arglist exp}}"
+    $gt = $gta unless $gta==:range
+    $gta=nil
+    r
   end
 
   def process_attrasgn exp # :nodoc:
@@ -480,10 +489,39 @@ class Ruby2Ruby < SexpProcessor
     end
     
     def to_t!
-      to_s!.gsub(/\"/,'')
+      to_s!.gsub(/\"/,'').gsub(/^\:/,'')
     end
   end
-$ga=[]
+  
+  def fqn s
+    until !s.is_a?(LocalScope)
+      s=s.parent
+    end
+    
+    n = [s.name]
+    until !s.parent
+      s=s.parent
+      n << s.name if s
+    end
+    
+    n.reverse.join(".").gsub(/^\./,'')
+  end
+  
+  $ga=[]
+  def find_sym t,f
+    n = fqn(scope)
+    a=n.split(".")
+    z = "#{n}.#{t}.#{f}"
+    
+    until q=$scope[0].map[z.gsub(/^\./,'')]
+      break if a == []
+      a.pop
+      z = a.join('.')+".#{t}.#{f}"
+    end
+    
+    q
+  end
+
   def process_call(exp, safe_call = false) # :nodoc:
 
    $gt = nil if $gt.to_s =~ /var|void/
@@ -494,6 +532,11 @@ $ga=[]
 
     receiver_node_type = recv && recv.sexp_type
     receiver = process recv
+    rgt=$gt
+
+    rgt = scope.guess_type(receiver.to_s)
+
+    $sgt = rgt if name.to_s =~ /connect/
     receiver = "(#{receiver})" if ASSIGN_NODES.include? receiver_node_type
 
     # args = []
@@ -624,9 +667,11 @@ $ga=[]
       end
     when :[] then
       receiver ||= "self"
-      if $procs.index(receiver)
+      if ($procs||[]).index(receiver)
         "#{receiver}(#{args.join(", ")})"
       else
+        $gt = $gt.to_s[0..-3] if ($gt.to_s =~ /\[\]/) && $gta != :range
+        $gta=nil
         "#{receiver}[#{args.join(", ")}]"
       end
     when :[]= then
@@ -666,6 +711,12 @@ $ga=[]
       elsif n=="nil!"
         $gt = receiver.to_s!.gsub(/\.$/,'')
         "null"
+      elsif n=="empty!"
+        $gt = receiver.to_t!.gsub(/\.$/,'')
+        "{}"
+      elsif n=="cast!"
+        $gt = (q=receiver.to_t!.gsub(/\.$/,''))
+        "((#{q})#{args})"
       elsif (n == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
         ($DATA[File.expand_path(exp.file)] || "").inspect
       elsif (n == "require")
@@ -810,13 +861,15 @@ $ga=[]
           s=s.parent
         end
         
-        if m=s.declared?(name.to_s!)
+        fn=name.to_s!
+        
+        if m=(s.declared?(fn) || find_sym(rgt,fn))
           r_args.each_with_index do |q,i|
-            if t=m.args[i]
+            if t=m.args[i] && ("var" != m.args[i].to_s!)
               
             else
              
-              q = nil if q.to_s == 'var'
+              q = nil if q.to_s == 'var'              
               q ||= scope.guess_type(n_args[i].to_s!)
               q = nil if q.to_s == 'var'
               m.args << (q)   
@@ -926,8 +979,12 @@ $ga=[]
 
   def process_cvdecl exp # :nodoc:
     _, lhs, rhs = exp
-
-    "static #{lhs.to_s.gsub(/^\@\@/)} = #{process rhs}"
+    q = process rhs
+    r = " = #{q}"
+    r = "" if q == "{}" 
+    res="static #{$gt} #{s=lhs.to_s.gsub(/^\@\@/,'')}#{r}"
+    scope.map[s] = $gt
+    res
   end
 
   def process_defined exp # :nodoc:
@@ -998,7 +1055,7 @@ $ga=[]
     args = "()" if (!args) || (args=='')
     args=args.gsub(/\(|\)/,'').split(",")
     i=-1
-    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i] : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t if (t.to_s != 'var') && !scope.declared?(q);x; end.join(", ")+")" if args!="()"    
+    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i].to_t! : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t if (t.to_s != 'var') && !scope.declared?(q);x; end.join(", ")+")" if args!="()"    
     args.gsub("  ", " ")
 
     body = body.map { |ssexp|
@@ -1034,7 +1091,7 @@ $ga=[]
     end.join+"\n") unless scope.parent.is_a?(LocalScope)
 
     $SIG = nil
-    $return = false
+  
     $scope << $scope[-2] #unless $SIG2 || $DELG2
 
     push_sig(name.to_s, type) unless $PROP 
@@ -1054,10 +1111,14 @@ $ga=[]
     c = ''
     c =  "// #{exp.file}: #{exp.line}\n//\n" if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
     blk = '' if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
-     
-    r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{type.to_t!}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
+    rt=type.to_t!.gsub(//,'') 
+    r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{rt}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     $gt=nil
+
+    raise "Infered return type or return in void function, line: #{exp.line}" if $did_ret && ([nil,'',"void","var", "error"].index(rt))
+    $return = nil
+    $did_ret=nil
     r
   end
 
@@ -1085,7 +1146,11 @@ $ga=[]
   def process_dot2(exp) # :nodoc:
     _, lhs, rhs = exp
 
-    "#{process lhs}:#{process rhs}"
+    r="#{l=process lhs}:#{process rhs}"
+    $gta=:range
+
+    $gt = scope.guess_type(l).to_s!+"[]"
+    r
   end
 
   def process_dot3(exp) # :nodoc:
@@ -1144,8 +1209,11 @@ $ga=[]
 
   def process_flip2 exp # :nodoc:
     _, lhs, rhs = exp
+     $gta=:range
+     r="#{l=process lhs}:#{process rhs}"
 
-    "#{process lhs}:#{process rhs}"
+     $gt = scope.guess_type(l).to_s!+"[]"
+     r
   end
 
   def process_flip3 exp # :nodoc:
@@ -1159,12 +1227,19 @@ $ga=[]
 
     $scope << LocalScope.new($scope[-1])
     recv = process recv
+    if $gta ==:range
+      rng = true
+    end
     iter = process iter
     body = process(body) || "// do nothing"
-
+    
     result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (var #{iter.gsub("var ",'')}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
 
-    result << indent("var #{iter.gsub("var ",'')} = q_#{qn}[#{iter.gsub("var ",'')}_n];")
+    result << indent("var #{iter.gsub("var ",'')} = q_#{qn}[#{i=iter.gsub("var ",'')}_n];")
+    if rng
+      result = []
+      result << "for (var #{i} = #{recv.to_s!.split(":")[0]}; #{i}<=#{recv.to_s!.split(":")[1..-1].join(":")};#{i}++) {"
+    end
     result << indent(fmt_body(body,exp))
     $scope.pop
     result << "}"
@@ -1216,7 +1291,7 @@ $ga=[]
 
   def process_iasgn(exp) # :nodoc:
     _, lhs, rhs = exp
-
+$gt=nil
     lhs = lhs.to_s.gsub("@", 'this.')
 
     if rhs then
@@ -1317,11 +1392,18 @@ $ga=[]
 
 
     iter = process iter
+    igt = $gt
     is_lambda = is_lambda && ((w=iter.strip) !~ /^foreach \(/)
 
     $FE = ((w=iter.strip) =~ /^foreach \(/)
     $scope << $scope[-2] if ($PROP && !$PROP.empty?)# || $SIG2 || $DELG2   
-    body = process body if body
+    
+    ob=body
+    
+    if ($FE || $PROP || $SIG2 || $DELG2) 
+      body = process body if body
+    end
+    
     $scope.pop if ($PROP && !$PROP.empty?) #|| $SIG2 || $DELG2
     $FE = ((w=iter.strip) =~ /^foreach \(/)
     args = case
@@ -1362,10 +1444,23 @@ $ga=[]
         iter << "(" if (iter !~ /\)$/) && !$FE
         result << "#{iter.gsub(/\)$/,', ')} (#{args}) => {\n" if !$FE
         result << "\n#{iter} #{args} {\n" if $FE
+        if !$FE
+          $scope << LocalScope.new(scope)
+          q=iter.gsub(/\($/,'').split(".")
+          a=scope.guess_type(q[0])
+          q.pop
+          p scope.get(q[0..1].join("."))
+          body = process body if body
+          d = scope.map.map do |k,v| next if v.to_s! == "var"; "#{v} #{k} = null;" end.join("\n")+"\n"
+          body = d+body
+          $sgt=nil
+          $scope.pop
+        end
         result << '' if !$FE
       end
     end
     
+
     body = fmt_body(body.strip)
     
     if $PROP || $SIG2 || $DELG2
@@ -1444,12 +1539,13 @@ $ga=[]
     _, name, value = exp
 
     s=""
-    if (t= (scope.assign(name, pv=process(value)))).to_s! == 'var'
+    if (t= (scope.assign(name, pv=process(value)))).to_s!.to_t! == 'var'
 
 
      s += "var "
     end
-    $gt = nil
+
+    $gt = t
     s += "#{name}"
     s += " = #{pv}" if value
     s
@@ -1459,6 +1555,8 @@ $ga=[]
     _, obj = exp
     case obj
     when Range then
+      $gta=:range
+      lt=$gt = scope.guess_type(obj.inspect.split("..")[0]).to_s!+"[]"
       "#{obj.inspect.gsub("..",':')}"
     when Regexp 
       $gt = 'Regex'
@@ -1695,8 +1793,12 @@ $ga=[]
       rhs_type = rhs.sexp_type
       rhs = process rhs
       rhs = "(#{rhs})" if ASSIGN_NODES.include? rhs_type
-      $return = scope.guess_type(rhs.gsub(/^this\./,''));
+     
+      $gt = nil if $gt.to_s=="var"
+      $return = $gt || scope.guess_type(rhs.gsub(/^this\./,''));
       $return = nil if ($return == :var) || $PROP
+      $did_ret=true unless $PROP || $SIG || $SIG2
+      rhs << ";" if rhs.to_s.strip =~ /\}$/
       "return #{rhs}"
     end
   end
