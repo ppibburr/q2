@@ -60,7 +60,7 @@ end
 
 
 class Scope
-  attr_reader :map, :parent, :fields, :args
+  attr_reader :map, :parent, :fields, :args, :includes, :qargs
   attr_accessor :name, :superclass, :return_type, :is_class, :is_iface, :is_namespace, :is_root
   @@ins = []
   
@@ -89,13 +89,34 @@ class Scope
     @name=''
     @fields={}
     @args=[]
+    @includes = []
+    @qargs=[]
   end  
+  
+  def ancestors
+    a = []
+    a = [superclass] if superclass
+    a.push *includes
+    a
+  end
+  
+  def ancestor_declared? q
+    r=nil
+    ancestors.find do |a|
+      r = Scope.find(a) do |s|
+        p qname: s.name if s
+        s ? s.declared?(q) : $scope[0].map["#{a}.#{q}"] 
+      end 
+      break if r
+    end
+    r
+  end
   
   def declared? q
 
     q=q.to_s.gsub(/\(.*?\)/,'').gsub("@",'') if q
 
-    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || (superclass ? Scope.find(superclass) do |s| s ? s.declared?(q) : $scope[0].map["#{superclass}.#{q}"] end : nil)) if q
+    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || ((qq=ancestor_declared?(q)) ? qq : nil)) if q
 
     return z if q =~ /\./
 
@@ -1101,6 +1122,8 @@ class Ruby2Ruby < SexpProcessor
     type=type.to_s!
     i=-1
 
+    scope.qargs.push(*args[1..-2].split(",").map do |qq| qq.split(" ")[0] if qq.split(" ")[1] end.find_all do |qq| qq end) if scope.qargs.empty?
+
     scope.return_type = type
 
     $scope.pop 
@@ -1445,14 +1468,46 @@ $gt=nil
         result << "#{iter.gsub(/\)$/,', ')} (#{args}) => {\n" if !$FE
         result << "\n#{iter} #{args} {\n" if $FE
         if !$FE
-          $scope << LocalScope.new(scope)
-          q=iter.gsub(/\($/,'').split(".")
+          $scope << as=LocalScope.new(scope)
+          q=iter.gsub(/\($/,'').gsub(/^this./,'').split(".")
           a=scope.guess_type(q[0])
-          q.pop
-          p scope.get(q[0..1].join("."))
+          q.shift
+          q.unshift a
+          s=(Scope.find(a) do |x| x.get(q[1]) if x end) 
+          s||=(Scope.find(fqn(a)) do |x| x.get(q[1]) if x end) if a.is_a?(Scope)
+          s||=(Scope.find(a.to_s.split(".")[1]) do |x| x.get(q[1]) if x end) if !a.is_a?(Scope)
+          s||=(Scope.find(fqn(a.name.split(".")[1])) do |x| x.get(q[1]) if x end) if a && a.is_a?(Scope) rescue nil
+          p iter: q, q: q[0] if s
+          dd={}
+
+
+          if s
+       
+            args.split(",").each_with_index do |qa,i|
+              p iter: q, a: qa, m: s.map, sq: s.qargs, ar: args
+              g=dd[qa.strip] = Scope.find(qt=s.qargs[i]) do |qs| qs if qs end
+              dd[qa.strip] = nil if dd[a.strip]==""
+              dd[h=qa.strip] = qt
+              p gmap: [qt.to_s] if g.name if g
+              p qiter: q, sq: s.qargs
+         
+            end
+    
+          dd.each do |vv,tt| 
+          p gmap: [vv,tt.to_s]
+          scope.map[vv] = tt end
+          end
           body = process body if body
-          d = scope.map.map do |k,v| next if v.to_s! == "var"; "#{v} #{k} = null;" end.join("\n")+"\n"
+
+          d = scope.map.map do |k,v| 
+            p ddk: dd.keys, k: k
+            next if dd[k]
+            next if v.to_s! == "var"; 
+            next if args.split(",").map do |vq| vq.strip end.index(k)
+            "#{v} #{k} = null;" end.join("\n")+"\n"
           body = d+body
+         
+          p qiter: q, sq: dd.keys, smap: as.map
           $sgt=nil
           $scope.pop
         end
@@ -1460,7 +1515,7 @@ $gt=nil
       end
     end
     
-
+    
     body = fmt_body(body.strip)
     
     if $PROP || $SIG2 || $DELG2
@@ -2197,7 +2252,8 @@ $gt=nil
       process(sexp).chomp
     }
     
-    result << (q % ("#{$incl.empty? ? '' : " : "}"+$incl.join(", "))) 
+    result << (q % ("#{$incl.empty? ? '' : " : "}"+$incl.join(", ")))
+    scope.includes.push *$incl 
 $incl = []
     body = unless body.empty? then
              indent(fmt_body(body.find_all do |q| q end.map do |q| (q.strip =~ /^\}$/) ? q+"\n" : q end.join("\n"))) + "\n"

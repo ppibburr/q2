@@ -80,8 +80,9 @@ namespace module Qode
       
       @m.added.connect() do |d|
         p "Added: #{d.name}"
+        
         ev = :Document.cast!(d)
-        ev.open_file(ev.resource)
+        ev.open_file(d.resource)
         ev.view.populate_popup.connect(on_populate_menu);
         @title = "#{app_name} | #{ev.file.location.get_path()}"
         vte.feed_child("cd #{File.dirname(ev.file.location.get_path())}\n".data)        

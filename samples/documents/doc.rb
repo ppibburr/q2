@@ -127,6 +127,7 @@ namespace module Documents
     
     signal {
       def changed d; end
+      defn [:Doc]
       def added d; end
       def removed d;end
     }
@@ -158,6 +159,7 @@ namespace module Documents
       end
     
       added.connect() do |d|
+        x = d.resource
         @_list << d
         append_page `(Gtk.Widget)d`, Gtk::Label.new(d.name)
       end
