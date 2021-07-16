@@ -292,19 +292,20 @@ namespace module Qode
     end
 
     signal() { def modify();end}
+    
     signal() { def show_find();
-        @finder.q.text = search_text
-        @finder.show_all()    
+      @finder.q.text = search_text
+      @finder.show_all()    
     end }
+    
     signal() { def show_goto();
-        @go2.show_all()    
+      @go2.show_all()    
     end }
-    signal() { 
-      def show_repl()
-        @repl.q.text = search_text
-        @repl.show_all()
-      end
-    }
+    
+    signal() { def show_repl()
+      @repl.q.text = search_text
+      @repl.show_all()
+    end }
   end
 end
 

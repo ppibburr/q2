@@ -1,4 +1,5 @@
 #!/usr/bin/env ruby
+
 $t=Time.now
 $: << File.join(File.dirname(__FILE__), "/../lib")
 require 'rubygems'
@@ -42,7 +43,8 @@ ARGV.push "-" if ARGV.empty? && !$c
 $parser = parser    = RubyParser.new
 ruby2ruby =$r2v= Ruby2Ruby.new
 $delete = []
-$scope = [Scope.new]
+$scope = [r=Scope.new]
+r.map['string.split'] = 'string[]'
 $sa = sa={}
 $ruby = []
 $one=nil
@@ -74,12 +76,20 @@ end
 
 def write
   `mkdir -p ./q_generated/#{$prg}`
-  $sao.map do|f| 
+  q = File.join("./q_generated", $prg, "q.vala")
+  if !$Q.empty?
+    File.open(q, "w") do |qf|
+      qf.puts "namespace Q {\n#{$Q}\n}"
+    end
+  end  
+  a=$sao.map do|f| 
     out = File.join("./q_generated", $prg, File.basename(f)+".vala")
     STDERR.puts "transpiled: #{out}"
     File.open(out,"w") do |o| o.puts "// File: #{f}\n\n"+$req[f] end
     out
   end
+  a.push(q) if !$Q.empty?
+  a
 end
 
 def compile f, prg=$prg
@@ -106,6 +116,7 @@ def run prg=$prg
   system c
 end
 
+$Q=""
 $sao=[]
 ARGV.each do |file|
   if $i
@@ -160,7 +171,7 @@ end
   rescue
     raise "hell"
   end
-
+$Q=""
 $SIG=nil
 $KLASS=nil
 $FE=nil
@@ -190,7 +201,7 @@ end
   rescue
     raise "hell"
   end
-
+$Q=""
 $SIG=nil
 $KLASS=nil
 $FE=nil
@@ -208,6 +219,35 @@ $sao.each do |f|
   ##  Three passes: much infer
   ##  return type, full type var assigment, return of type infered from argument, most field values
 end
+$req = {}
+File.open("./types.rbm", "w") do |f|
+  f.puts Marshal.dump($scope[0])
+end
+
+  begin
+    $scope = [Marshal.load(open('./types.rbm').read)]
+  rescue
+    raise "hell"
+  end
+$Q=""
+$SIG=nil
+$KLASS=nil
+$FE=nil
+$return=nil
+
+
+$ruby = []
+i=-1
+$sao.each do |f|
+  sexp = $sa[f]
+  $ruby << a[i+1]
+  
+  r2vala(sexp)
+  
+  ##  Three passes: much infer
+  ##  return type, full type var assigment, return of type infered from argument, most field values
+end
+
 
 $req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
 $sao.unshift "./q.q"

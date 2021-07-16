@@ -19,14 +19,14 @@ namespace module Qode
     end
        
     def open_file(f)
-        @file = Gtk::SourceFile.new()
-        @file.location = `File.new_for_path(f)`
+      @file = Gtk::SourceFile.new()
+      @file.location = `File.new_for_path(f)`
 
-        view.source_buffer.set_language(view.language_manager.guess_language(@resource,nil))       
+      view.source_buffer.set_language(view.language_manager.guess_language(@resource,nil))       
 
-        file_loader = Gtk.SourceFileLoader.new(view.source_buffer, file);         
-        file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
-        show_all()
+      file_loader = Gtk.SourceFileLoader.new(view.source_buffer, file);         
+      file_loader.load_async.begin(Priority::DEFAULT, nil, nil);
+      show_all()
     end
   end
   
@@ -81,7 +81,7 @@ namespace module Qode
       @m.added.connect() do |d|
         p "Added: #{d.name}"
         
-        ev = :Document.cast!(d)
+        ev = Document.cast!(d)
         ev.open_file(d.resource)
         ev.view.populate_popup.connect(on_populate_menu);
         @title = "#{app_name} | #{ev.file.location.get_path()}"
@@ -108,7 +108,7 @@ namespace module Qode
       grid.attach(menu_bar, 0, 0, 1, 1);
       grid.attach(paned, 0, 1, 1, 1);
 
-      add(`grid as Gtk.Widget`);
+      add(grid);
 
       show_all();
 
@@ -163,7 +163,7 @@ namespace module Qode
     # *This will save the file to the location we had defined before.
     # *It doesn't consider the case where you didn't "select" a file before.
     def on_save()
-      edit = `(Document)m.list[m.active]`
+      edit = Document.cast!(m.list[m.active])
       file = edit.file
       if (file != nil && !file.is_readonly())
         file_saver = Gtk.SourceFileSaver.new(edit.view.source_buffer, file);
@@ -174,7 +174,7 @@ namespace module Qode
     #* Create the submenu to select language for our source view, using the right-click contextual menu
     defn [Gtk::Menu]
     def on_populate_menu(menu)
-      edit = `(Document)m.list[m.active]`
+      edit = Document.cast!(m.list[m.active])
       language_menu = Gtk::MenuItem.new()
       language_menu.set_label("Language")
 
@@ -215,7 +215,7 @@ namespace module Qode
     end
       
     def compile
-      ev = `(Document)m.list[m.active]`
+      ev = Document.cast!(m.list[m.active])
       on_save()
       t=QTe::Window.new().term
       t.spawn(["/bin/sh"])
@@ -223,7 +223,7 @@ namespace module Qode
     end
     
     def run
-      ev = `(Document)m.list[m.active]`
+      ev = Document.cast!(m.list[m.active])
       on_save()
       t=QTe::Window.new().term
       t.spawn(["/bin/sh"])

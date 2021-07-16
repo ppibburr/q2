@@ -101,22 +101,22 @@ class Scope
   end
   
   def ancestor_declared? q
+    q=q.split(".")
+    q.shift if q.length > 1
+    q=q.join(".")
     r=nil
     ancestors.find do |a|
-      r = Scope.find(a) do |s|
-        p qname: s.name if s
-        s ? s.declared?(q) : $scope[0].map["#{a}.#{q}"] 
-      end 
+      r = $scope[0].map["#{a}.#{q}"] 
+
       break if r
     end
     r
   end
   
   def declared? q
-
     q=q.to_s.gsub(/\(.*?\)/,'').gsub("@",'') if q
 
-    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || ((qq=ancestor_declared?(q)) ? qq : nil)) if q
+    z=(self.map[q]  || ((qq=ancestor_declared?(q)) ? qq : nil)) || (parent ? parent.declared?(q) : nil) if q
 
     return z if q =~ /\./
 
@@ -128,7 +128,13 @@ class Scope
   def guess_type(what)
       what=what.to_s!
       if t=declared?(what)  
+        p declared: what
         t
+      elsif t=declared?(what.gsub(/\[[0-9+]\]$/,''))  
+        p declared: what
+        return :var if t == :var
+        return t if t.is_a?(Scope)
+        t.gsub("[]",'')
       else
         case what
         when /^new (.*)/
@@ -162,21 +168,36 @@ class Scope
         end
       end  
   end
-  
+  $fl={}
   def assign q, what,cs=nil
     q=q.to_s.gsub(/^\./,'')
+    what=what.gsub(/^this\./,'')
     
     cs = self unless cs
-    unless qq=cs.declared?(q)
+    p assign: q, what: what, gt: $gt
+    unless (qq=cs.declared?(q)) 
       qq = (($gt.to_s != 'var') ? $gt : nil) || cs.guess_type(what) || :var
+      
+      if (!qq) || (qq==:var)
+        qq = $fl["#{declared?("#{what.split(".")[0..-2].join(".")}")}.#{what.split(".")[-1]}"]
+      end
+
+      qq||=:var
 
       self.map[q] = qq
-    
+      p assigned: q, qq: qq
       $gt = nil
       return qq
     end
     
-    $gt=:var
+    $gt=qq
+    return qq if qq != :var
+    
+    if b=declared?(what.split(".")[0..-2].join("."))
+      return b.declared?(what.split(".")[-1])
+    end
+    
+    $gt=nil
     return nil
   end
 end
@@ -436,15 +457,18 @@ class Ruby2Ruby < SexpProcessor
     if !$mb && (scope == $scope[0])
     if (scope == $scope[0].map["main"])
     else
-      $scope << ($scope[0].map["main"] ||= sc=LocalScope.new(scope))
+      $scope <<
+       ($scope[0].map["main"] ||= sc=LocalScope.new(scope))
     end
       $mb=true
-      "static unowned string[] __q_args__;\n"+
-      "static unowned string[] __q_argv__;\n"+
-      "static int main(string[] _q_args) {\n%__Q_MAIN_DEC__\n"+
-      "string[] qa = {\"#{f}\"};foreach (var q in _q_args) {qa += q;};"+
-      "__q_argv__ = _q_args[1:-1];\n"+  
-      "__q_args__ = qa;\n\n"
+      $Q << "public static unowned string[] args = null;"
+      $Q << "public static unowned string[] argv = null;"
+      #"static unowned string[] __q_args__;\n"+
+      #"static unowned string[] __q_argv__;\n"+
+      "static int main(string[] q_args) {\n%__Q_MAIN_DEC__\n"+
+      "string[] qa = {\"#{f}\"};foreach (var q in q_args) {qa += q;};"+
+      "  Q.argv = q_args[1:-1];\n"+  
+      "  Q.args = qa;\n\n"
       
     else
       ""
@@ -459,6 +483,7 @@ class Ruby2Ruby < SexpProcessor
 
     result.push(*body.map { |sexp|
       s=''
+      $gt=nil
       if ([:call, :lasgn].index(q=sexp[0]))
         if  q==:call
           if ![:namespace, :require, :generics, :delegate, :signal, :defn].index(sexp[2])
@@ -782,6 +807,22 @@ class Ruby2Ruby < SexpProcessor
       elsif n == "new"
         re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{args.to_s == "" ? '()' : args}"
 
+        fn=$gt
+        
+        if m=(scope.declared?(fn) || find_sym(rgt,fn))
+          r_args.each_with_index do |q,i|
+            if t=m.args[i] && ("var" != m.args[i].to_s!)
+              
+            else
+             
+              q = nil if q.to_s == 'var'              
+              q ||= scope.guess_type(n_args[i].to_s!)
+              q = nil if q.to_s == 'var'
+              m.args << (q)   
+            end
+          end if n_args && m.is_a?(Scope)
+        end
+
         re
       elsif n == "new_for_path"
         re="#{$gt=receiver.to_s.gsub(/\.$/,'')}.new_for_path#{args.to_s == "" ? '()' : args}"
@@ -983,7 +1024,7 @@ class Ruby2Ruby < SexpProcessor
     if n =~ /(^ARGV$)|(^Q_ARGV$)/
       $gt = "string[]"
     end
-    n.gsub(/^ARGV$/,"__q_argv__").gsub(/^Q_ARGV$/,"__q_args__")
+    n.gsub(/^ARGV$/,"Q.argv").gsub(/^Q_ARGV$/,"Q.args")
   end
 
   def process_cvar exp # :nodoc:
@@ -1013,15 +1054,17 @@ class Ruby2Ruby < SexpProcessor
     "defined? #{process rhs}"
   end
 
+  $scope = []
+  
   def scope
-    ($scope||=[]).last
+    ($scope).last
   end
-
+  
   $SIG = nil
   $KLASS = nil
   def process_defn(exp) # :nodoc:
     $procs = []
-    ($scope||=[]) << LocalScope.new(scope)
+    ($scope) << LocalScope.new(scope)
     _, name, args, *body = exp
 
     name = "get" if name.to_s! == "[]"
@@ -1047,13 +1090,13 @@ class Ruby2Ruby < SexpProcessor
       _, ivar = body.first
       ivar = ivar.to_s[1..-1] # remove leading @
       reader = name.to_s
-      $scope.pop
+      #$scope.pop
       return "public #{name.inspect} {}" if reader == ivar
     when s{ q(:defn, atom, t(:args), q(:iasgn, atom, q(:lvar, atom))) } then
       _, ivar, _val = body.first
       ivar = ivar.to_s[1..-1] # remove leading @
       reader = name.to_s.chomp "="
-      $scope.pop
+      #$scope.pop
       return "public #{reader} {}" if reader == ivar
     end
     
@@ -1065,12 +1108,20 @@ class Ruby2Ruby < SexpProcessor
     name = name.to_s.split(".")[-1]
     scope.name = name
 
-
     m_args = rs = $scope[0].map["#{scope.parent.name}.#{name.to_s}"]
     if m_args.is_a?(Scope)
       m_args = m_args.args
     else
       m_args=nil
+    end
+    
+    if static && (name=='main')
+      m_args=[]
+      m_args[0] = "string[]"  
+      $Q << "public static unowned string[] argv = null;"
+      $Q << "public static unowned string[] args = null;"
+      qa = true  
+      args=("(args)") if args==''    
     end
     
     args = "()" if (!args) || (args=='')
@@ -1087,6 +1138,7 @@ class Ruby2Ruby < SexpProcessor
 
     body << "// do nothing" if body.empty?
     body = body.join("\n")
+    body =     (qa ? "Q.argv = #{args[1..-2].split(",")[0].split(" ")[-1]}[1:-1];\n" : '' )+(qa ? "\nstring?[] qa = {\"#{File.basename(exp.file)}\"};foreach (var _q_a in Q.argv) {qa += _q_a;}\nQ.args = qa;\n" : '' )+body
     body = body.lines.to_a[1..-2].join("\n") if
       simple && body =~ /^\Abegin/ && body =~ /^end\z/
     body = indent(fmt_body(body,exp)) unless simple && body =~ /(^|\n)rescue/
@@ -1135,12 +1187,13 @@ class Ruby2Ruby < SexpProcessor
     c =  "// #{exp.file}: #{exp.line}\n//\n" if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
     blk = '' if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
     rt=type.to_t!.gsub(//,'') 
-    r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{rt}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
+    r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{rt}#{$ret_nil ? (rt.to_s !~ /\?$/ ? '?' : '') : ''}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     $gt=nil
 
     raise "Infered return type or return in void function, line: #{exp.line}" if $did_ret && ([nil,'',"void","var", "error"].index(rt))
     $return = nil
+    $ret_nil=false
     $did_ret=nil
     r
   end
@@ -1418,12 +1471,12 @@ $gt=nil
     igt = $gt
     is_lambda = is_lambda && ((w=iter.strip) !~ /^foreach \(/)
 
-    $FE = ((w=iter.strip) =~ /^foreach \(/)
+    fe=$FE = ((w=iter.strip) =~ /^foreach \(/)
     $scope << $scope[-2] if ($PROP && !$PROP.empty?)# || $SIG2 || $DELG2   
     
     ob=body
     
-    if ($FE || $PROP || $SIG2 || $DELG2) 
+    if ($PROP || $SIG2 || $DELG2) 
       body = process body if body
     end
     
@@ -1436,11 +1489,19 @@ $gt=nil
              " (#{process(args)[1..-2]}) => "
            else
              if (w=iter.strip) =~ /^foreach \((.*)/
+
                w=w.split("(")[1]
                fe=$1.gsub(/\.$/,'')
-
+               val = "#{process(args)[1..-2]}"
+               d = scope.guess_type(fe)
+               if df=Scope.find(d) do |f| f end# && d.declared?('get')
+                 if fet=df.declared?('get')
+                   fet=fet.to_t!
+                   #exit
+                 end
+               end
                iter = "foreach ("
-               "var #{process(args)[1..-2]} in #{fe} ) "
+               "#{fet||=d.to_s.gsub(/\[\]$/,'')} #{fetn=val} in #{fe} ) "
              else
                " #{process(args)[1..-2]}"
              end
@@ -1464,11 +1525,15 @@ $gt=nil
       if $PROP || $SIG2 || $DELG2
         
       else
+
         iter << "(" if (iter !~ /\)$/) && !$FE
         result << "#{iter.gsub(/\)$/,', ')} (#{args}) => {\n" if !$FE
         result << "\n#{iter} #{args} {\n" if $FE
-        if !$FE
+        if true#!$FE
           $scope << as=LocalScope.new(scope)
+          dd={}
+
+          if !fet
           q=iter.gsub(/\($/,'').gsub(/^this./,'').split(".")
           a=scope.guess_type(q[0])
           q.shift
@@ -1477,37 +1542,41 @@ $gt=nil
           s||=(Scope.find(fqn(a)) do |x| x.get(q[1]) if x end) if a.is_a?(Scope)
           s||=(Scope.find(a.to_s.split(".")[1]) do |x| x.get(q[1]) if x end) if !a.is_a?(Scope)
           s||=(Scope.find(fqn(a.name.split(".")[1])) do |x| x.get(q[1]) if x end) if a && a.is_a?(Scope) rescue nil
-          p iter: q, q: q[0] if s
-          dd={}
+          p iter: iter, q: q[0].to_s 
 
 
-          if s
+          if (s||=a).is_a?(Scope)
        
             args.split(",").each_with_index do |qa,i|
-              p iter: q, a: qa, m: s.map, sq: s.qargs, ar: args
-              g=dd[qa.strip] = Scope.find(qt=s.qargs[i]) do |qs| qs if qs end
-              dd[qa.strip] = nil if dd[a.strip]==""
-              dd[h=qa.strip] = qt
-              p gmap: [qt.to_s] if g.name if g
+           #   p iter: q, a: qa, m: s.map, sq: s.qargs, ar: args
+              #g=dd[qa.strip] = Scope.find(qt=s.qargs[i]) do |qs| qs if qs end
+              #dd[qa.strip] = nil if dd[a.to_s.strip]==""
+              dd[h=qa.strip] = qt=s.qargs[i]
+            #  p gmap: [qt.to_s] if g.name if g
               p qiter: q, sq: s.qargs
          
             end
-    
-          dd.each do |vv,tt| 
-          p gmap: [vv,tt.to_s]
-          scope.map[vv] = tt end
+
+
           end
+          else
+            dd[fetn] = fet
+          end
+          dd.each do |vv,tt| 
+          p gmap: [vv.to_s,tt.to_s]
+          scope.map[vv] = tt end
+          $gt=nil
           body = process body if body
 
           d = scope.map.map do |k,v| 
             p ddk: dd.keys, k: k
             next if dd[k]
             next if v.to_s! == "var"; 
-            next if args.split(",").map do |vq| vq.strip end.index(k)
-            "#{v} #{k} = null;" end.join("\n")+"\n"
+            next if args.split(",").map do |vq| vq.strip end.index(k) # Error
+            "#{v} #{k}#{['long','int','uint','double'].index(v.to_s!) ? '' : " = null;"}" end.join("\n")+"\n"
           body = d+body
          
-          p qiter: q, sq: dd.keys, smap: as.map
+          #p qiter: q, sq: dd.keys, smap: as.map
           $sgt=nil
           $scope.pop
         end
@@ -1547,10 +1616,10 @@ $gt=nil
               else
                 " "
               end
-    result << "\n" if $FE
+    result << "\n" if fe
     result << "\n}"
-    result << ")" if !$FE
-    result << "\n" if fe=$FE
+    result << ")" if !fe
+    result << "\n" if fe=fe
     $FE = nil
     result = result.join
     
@@ -1848,12 +1917,14 @@ $gt=nil
       rhs_type = rhs.sexp_type
       rhs = process rhs
       rhs = "(#{rhs})" if ASSIGN_NODES.include? rhs_type
-     
-      $gt = nil if $gt.to_s=="var"
-      $return = $gt || scope.guess_type(rhs.gsub(/^this\./,''));
-      $return = nil if ($return == :var) || $PROP
+      $ret_nil = true if rhs=="null"
       $did_ret=true unless $PROP || $SIG || $SIG2
-      rhs << ";" if rhs.to_s.strip =~ /\}$/
+      if !$ret_nil
+        $gt = nil if $gt.to_s=="var"
+        $return = $gt || scope.guess_type(rhs.gsub(/^this\./,''));
+        $return = nil if ($return == :var) || $PROP
+        rhs << ";" if rhs.to_s.strip =~ /\}$/
+      end
       "return #{rhs}"
     end
   end
@@ -2267,6 +2338,7 @@ $incl = []
 
         pri = (k.to_s! =~ /^\_/)
         result << indent("#{pri ? "private" : "public"} #{v} #{k};\n")+"\n"
+        $fl[fqn(scope)+".#{k}"] = v
       end
       result << indent("// END infered @<var>\n\n")+"\n\n"
     end

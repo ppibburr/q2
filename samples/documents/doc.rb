@@ -43,7 +43,6 @@ namespace module Documents
   module Manager
     include Object
     
-    defn [:string],:int
     def find r
       i = 0
       @list.each do |d|
@@ -79,7 +78,7 @@ namespace module Documents
       activate(d) if i == @list.length-1
     end
     
-    defn [:Doc]
+
     def activate d
       d.activated()
       changed(d)
@@ -109,7 +108,7 @@ namespace module Documents
       activate(d)
     end
     
-    defn [:Doc]
+
     def add d;
       d.activate.connect(on_activate_document)    
       added(d)
@@ -127,7 +126,6 @@ namespace module Documents
     
     signal {
       def changed d; end
-      defn [:Doc]
       def added d; end
       def removed d;end
     }
