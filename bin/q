@@ -340,7 +340,8 @@ STDERR.puts "@ #{pf}"
     
     fork do
       fork do
-        system "budgie-panel --replace &"
+        
+        system "cd ~ && budgie-panel --replace &"
       end
     end
   end

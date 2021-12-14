@@ -1,4 +1,5 @@
-require q: './budgie_ruby.q'
+begin;puts DATA.read;rescue;end; exit;
+require q: 'samples/budgie-ruby-applet/src/budgie_ruby.q'
 
 defn [TypeModule]
 def peas_register_types(_module)

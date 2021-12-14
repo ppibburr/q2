@@ -17,7 +17,7 @@ $: << File.dirname(__FILE__)
 
 #{$libs.map do |l| File.exist?("./ext/#{l}") ? "require '#{l}'\n" : "" end.join()}
 
-module #{lib_name.capitalize}
+module #{lib_name.split("-").map do |q| q.capitalize end.join}
   p lib: '#{lib_name}'
   class << self
     @initialized = false

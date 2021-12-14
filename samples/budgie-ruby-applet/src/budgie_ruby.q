@@ -1,4 +1,4 @@
-require q: "./qapplet.q"
+require q: "samples/budgie-applet.q"
 require pkg: "ruby"
 
 namespace
@@ -38,11 +38,12 @@ end
 
 
 __END__
-require './qapplet.rb'
+
 
 APPLETS={}
 
 def init_applet ptr, path
+  require File.expand_path(File.dirname(path))+'/budgie-applet.rb'
   applet = APPLETS[File.expand_path(path)]=GObjectIntrospection::Loader.instantiate_gobject_pointer(ptr)
   load path
 rescue => e
