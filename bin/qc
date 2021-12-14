@@ -1,0 +1,18 @@
+#!/usr/bin/env ruby
+
+if !File.exist?(bc=File.dirname(__FILE__)+"/q.rbc")
+byte_code = RubyVM::InstructionSequence.compile_file File.dirname(__FILE__)+"/q"
+File.binwrite File.dirname(__FILE__)+"/q.rbc", byte_code.to_binary
+end
+
+if byte_code
+  code = byte_code.to_binary
+else
+  p :exists
+  code = File.binread(bc)
+end
+
+
+instruction_from_byte_code = RubyVM::InstructionSequence.load_from_binary code
+
+instruction_from_byte_code.eval

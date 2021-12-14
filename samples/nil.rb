@@ -20,9 +20,9 @@ namespace module CTags
        a= /(\w+)\s/.split(l)
        z=5
        q=3
-       z = 7 if a[5] == "method"
-       q = 5 if a[5] == "method"
-       tags << Tag.new(a[1],a[z],a[q])
+       o = 0
+       o = 2 if a[5] == "method"
+       tags << Tag.new(a[1],a[z+o],a[q+o])
       end
     end
    

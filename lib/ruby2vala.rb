@@ -1,8 +1,7 @@
 #!/usr/bin/env ruby -w
-
+require 'rubygems'
 $: << File.expand_path(File.dirname(__FILE__))
 require "ruby2vala/vapi_read"
-require "rubygems"
 require "sexp_processor"
 def f_path file
   if File.exist?(f=File.expand_path("#{$pdir}/"+file))
@@ -21,38 +20,89 @@ def f_path file
     raise "Q - No such file: #{file}"
   end
 end
+$NQ=0
 $DATA={}
 def data file
-  d = "begin;puts DATA.read;rescue;end; exit;\n#{open(file).read}"
+  d = "begin;puts DATA.read;rescue;end; exit;\n#{File.open(file).read}"
   File.open("./.d.q.rb","w") do |f|
     f.puts d
   end
   $DATA[file] = `ruby ./.d.q.rb`
 end
-
-def q_require file
+$imp = {}
+def q_require file, bool=false
   if file.is_a?(Hash)
     v=nil
-    $pkg << v=file[:pkg] unless $pkg.index(file[:pkg])
+    if file[:pkg]
+      return if $pkg.index(file[:pkg])
+    
+      $pkg << v=file[:pkg] unless $pkg.index(file[:pkg])
+    elsif f=file[:q]
+      f=f_path(f)
+      $vapidir = "./"
+      v=File.basename(f).split(".")[0]
+      $pkg << v unless $pkg.index(v)
+      if !File.exists?("./"+v+".vapi")
+        system "q --gir #{File.expand_path(f)}"
+      end
+
+      open("./#{v}.deps").read.split("\n").each do |pkg|
+        #$pkg  << pkg if (pkg.strip != '') && !$pkg.index(pkg)
+        $libs << pkg unless $libs.index(pkg)
+      end unless $libs.index(v)
+      $libs << "#{v}" unless $libs.index(v)
+    else
+      $NQ+=1
+    end
+    
+    v = nil if $imp[v]
     vapi_import v if v
+    $imp[v] = true
+    
     if v
+      $m ||= []
       $m.each do |k,v|
-        $scope[0].map[k]=v
+        if !v.is_a?(Hash)
+          if v.respond_to? :aa
+            $scope[0].map[k] = e=Scope.new($scope[0])
+            e.name = k
+            v.aa.map do |a,t|
+              e.map[a] = t
+              e.args << a
+              e.qargs << t
+            end
+            e.return_type = v.t
+          else
+            $scope[0].map[k]=v
+          end          
+        else
+          $scope[0].map[k] = e=Scope.new($scope[0])
+          e.name = k
+          e.superclass = v[:superclass]
+          e.includes.push(*v[:includes]) if v[:includes]
+        end
       end
     end
     return nil
   end
-  
+    
   return nil if file == "Q"
-
-  file = f_path(file)
- 
+  #return nil if (!bool) && $CTAGS
+  
+  begin
+    file = f_path(file)
+  rescue => e
+    if $CTAGS
+      return nil
+    end
+    raise e
+  end
   return nil if $sa[file]
   
   data(file)
   
   $ruby << (ruby = file == "-" ? $stdin.read : File.read(file))
-  
+  ($source||={})[File.expand_path(file)] = $ruby[-1]
   $sa[file] ||= (sexp = $parser.process(ruby, file))
   
   sexp
@@ -94,10 +144,11 @@ class Scope
   end  
   
   def ancestors
-    a = []
-    a = [superclass] if superclass
-    a.push *includes
-    a
+    if superclass
+      [superclass, includes].flatten
+    else
+      includes
+    end
   end
   
   def ancestor_declared? q
@@ -116,7 +167,7 @@ class Scope
   def declared? q
     q=q.to_s.gsub(/\(.*?\)/,'').gsub("@",'') if q
 
-    z=(self.map[q]  || ((qq=ancestor_declared?(q)) ? qq : nil)) || (parent ? parent.declared?(q) : nil) if q
+    z=(self.map[q] || (parent ? parent.declared?(q) : nil) || ((qq=ancestor_declared?(q)) ? qq : nil)) if q
 
     return z if q =~ /\./
 
@@ -126,20 +177,13 @@ class Scope
     declared? q
   end
   def guess_type(what)
-      what=what.to_s!
-      if t=declared?(what)  
-        p declared: what
-        t
-      elsif t=declared?(what.gsub(/\[[0-9+]\]$/,''))  
-        p declared: what
-        return :var if t == :var
-        return t if t.is_a?(Scope)
-        t.gsub("[]",'')
-      else
+      what=what.to_s!.gsub(/^this\./,'')
+
+      
         case what
         when /^new (.*)/
           q=$1
-          is_new?(what) ? q : :var
+          is_new?(what) ? q.split("(")[0] : :var
         when /^\"/
           "string"
         when /^\@\"/
@@ -164,17 +208,26 @@ class Scope
             :var
           end
         else
+      if (what !~ /\[/) && t=declared?(what)  
+        t
+      elsif t=declared?(what.gsub(/\[[0-9+]\]$/,''))  
+        return :var if t == :var
+        return t if t.is_a?(Scope)
+        t.gsub("[]",'')
+      else  
           :var
+          end
         end
-      end  
+       
   end
   $fl={}
   def assign q, what,cs=nil
+    what ||= 'void'
     q=q.to_s.gsub(/^\./,'')
     what=what.gsub(/^this\./,'')
     
     cs = self unless cs
-    p assign: q, what: what, gt: $gt
+
     unless (qq=cs.declared?(q)) 
       qq = (($gt.to_s != 'var') ? $gt : nil) || cs.guess_type(what) || :var
       
@@ -185,7 +238,7 @@ class Scope
       qq||=:var
 
       self.map[q] = qq
-      p assigned: q, qq: qq
+
       $gt = nil
       return qq
     end
@@ -194,6 +247,7 @@ class Scope
     return qq if qq != :var
     
     if b=declared?(what.split(".")[0..-2].join("."))
+      return b if !b.is_a?(Scope)
       return b.declared?(what.split(".")[-1])
     end
     
@@ -203,13 +257,26 @@ class Scope
 end
 
 def is_new? s
-  (s.gsub(/.*?\)/,'') == "") &&
-    s.scan(/.*?\)/).last == ")"
+  ((s.gsub(/.*?\)/,'') == "") &&
+    s.scan(/.*?\)/).last == ")") || ((s.gsub(/.*?\)/,'') == "") &&
+    s.scan(/.*?\)/).last == s)
+end
+
+
+class RootScope < Scope
 end
 
 class LocalScope < Scope
+end
 
-  
+def type_by_path path
+  a=path.split(".")
+  s=$scope[0]
+      
+  a.each do |q|
+    s=s.map[q]
+  end
+  s
 end
 
 # :stopdoc:
@@ -234,10 +301,28 @@ class Regexp
     }
   end
 end
+$NO_COM = true
 # :startdoc:
 class Sexp
   # add arglist because we introduce the new array type in this file
   @@array_types << :arglist
+  def comments
+    return "" if $NO_COM
+    return "" if !file || !line
+    return @qc if @qc
+    buff = $source[File.expand_path(file)]
+    lines = buff.split("\n")
+    
+    s = lines[i=line-2]
+    c=[]
+    while s.strip =~ /^#/
+
+      i -= 1
+      c << s.gsub(/^\ +#/,'')
+      s=lines[i]
+    end
+    @qc = c.reverse.join("\n")
+  end
 end
 ##
 # Generate ruby code from a sexp.
@@ -322,24 +407,29 @@ class Ruby2Ruby < SexpProcessor
   def process_arg_paren *o;exit;end
 
   def process_alias exp # :nodoc:
+    return "# TODO: alias"
     _, lhs, rhs = exp
-
+  
     parenthesize "alias #{process lhs} #{process rhs}"
   end
 
   def process_and exp # :nodoc:
     _, lhs, rhs = exp
 
-    parenthesize "#{process lhs} && #{process rhs}"
+    c=parenthesize "#{process lhs} && #{process rhs}"
+  $gt = :bool
+    c
   end
 
   def process_arglist exp # custom made node # :nodoc:
     _, *args = exp
 
+    $gta=nil
+
     args.map { |arg|
       code = process arg
-      
-      $gta = "#{scope.guess_type(code).to_s!.to_t!}[]" 
+     
+      $gta ||= "#{scope.guess_type(code).to_s!.to_t!}[]" 
 
       arg.sexp_type == :rescue ? "(#{code})" : code
     }.join ", "
@@ -451,23 +541,26 @@ class Ruby2Ruby < SexpProcessor
     code.join "\n"
   end
 
-  def mb? f='q'
+  def mb? f='q' 
+    if !$mb && (scope == $scope[0]) && (f==$program)
 
-    
-    if !$mb && (scope == $scope[0])
-    if (scope == $scope[0].map["main"])
-    else
-      $scope <<
-       ($scope[0].map["main"] ||= sc=LocalScope.new(scope))
-    end
+      return if $shared || $gir
+      
+      if (scope == $scope[0].map["main"])
+      else
+        $scope <<
+         ($scope[0].map["main"] ||= sc=LocalScope.new(scope))
+      end
+      
+
       $mb=true
       $Q << "public static unowned string[] args = null;"
       $Q << "public static unowned string[] argv = null;"
       #"static unowned string[] __q_args__;\n"+
       #"static unowned string[] __q_argv__;\n"+
       "static int main(string[] q_args) {\n%__Q_MAIN_DEC__\n"+
-      "string[] qa = {\"#{f}\"};foreach (var q in q_args) {qa += q;};"+
-      "  Q.argv = q_args[1:-1];\n"+  
+      "string[] qa = {\"#{f}\"};foreach (var q in q_args[1:(q_args.length)]) {qa += q;};"+
+      "  Q.argv = qa[1:qa.length-1];\n"+  
       "  Q.args = qa;\n\n"
       
     else
@@ -498,8 +591,6 @@ class Ruby2Ruby < SexpProcessor
       s
     })
     
-    
-
     result << "// do nothing\n" if result.empty?
     result = parenthesize result.join "\n"
     result += "\n" unless result.start_with? "("
@@ -544,11 +635,15 @@ class Ruby2Ruby < SexpProcessor
       s=s.parent
     end
     
+    if s
     n = [s.name]
     until !s.parent
       s=s.parent
       n << s.name if s
     end
+    end
+    
+    n||=[]
     
     n.reverse.join(".").gsub(/^\./,'')
   end
@@ -580,9 +675,9 @@ class Ruby2Ruby < SexpProcessor
     receiver = process recv
     rgt=$gt
 
-    rgt = scope.guess_type(receiver.to_s)
+    rgt = scope.guess_type(receiver.to_s.gsub(/\.$/,'').gsub(/^this\./,''))
 
-    $sgt = rgt if name.to_s =~ /connect/
+    ($sgt = rgt).to_s if name.to_s =~ /connect/
     receiver = "(#{receiver})" if ASSIGN_NODES.include? receiver_node_type
 
     # args = []
@@ -594,8 +689,10 @@ class Ruby2Ruby < SexpProcessor
     gt = $gt
     $gt=nil
     r_args = []
+    $co=receiver.to_s!
+    $call = name.to_s!
     $ns=true if name.to_s == "namespace"
-    $NS = true if(name.to_s == "namespace")
+    ns=$NS = true if(name.to_s == "namespace")
     in_context :arglist do
       max = args.size - 1
 
@@ -620,10 +717,33 @@ class Ruby2Ruby < SexpProcessor
         arg
       }.compact
     end
-    $NS=false
+    if $CTAGS && ns
+      #s=args[0].split(" ")[0]
+     
+      #sc=Scope.find(s) do |x| x end
+      #$CTAGS.find do |t| (t[:symbol].to_s! == s) && (t[:line]==exp.line) end[:kind] = :Namespace
+    end
+   # $NS=false
     $gt = gt
     case name
-    when :join
+    when :'web_extension!'
+      $WEB_EXT = true
+      $shared ||= true
+      ""
+    when :'JS!'
+      $JS = """
+      
+      public static Q.JSClass jsc;
+      public static void register(JSC.Context c) {
+        jsc=new Q.JSClass(c,\"#{scope.name}\",typeof(#{scope.name}));
+      
+      
+      """
+   
+      ""
+    when :proc
+      "#{args.join(", ")}"
+    when :join && (rgt != 'string[]')
        $gt=:string
        "Path.build_filename(#{args.join(", ")})"
     when :basename
@@ -651,6 +771,7 @@ class Ruby2Ruby < SexpProcessor
       elsif args.length > 1
         "#{receiver}.#{name}(#{args.join(", ")})"
       else
+        $gt = 'bool' unless ["+","-", "*", "/", "+=", "-="].index(name.to_s)
         name = "+=" if name.to_s! == "<<"
         l=scope.guess_type(receiver)
         r=scope.guess_type(args.join(", "))
@@ -701,14 +822,22 @@ class Ruby2Ruby < SexpProcessor
            
             r = r % args.join(",")
             l = l % receiver
-
+            
+            $gt = 'bool' if ['>','>=','==', '<=', '<', '!=', '&&'].index(name.to_s)
+            
             "(#{l} #{name} #{r})" 
           else
-            "(#{receiver} #{name} #{args.join(", ")})"
+            $gt = 'bool' if ['>','>=','==', '<=', '<', '!=', '&&'].index(name.to_s)
+            c="(#{receiver} #{name} #{args.join(", ")})"
+            #p gt: $gt, c: c, n: name.to_s
+            c
           end
         else
           $gt = lt
-          "(#{receiver} #{name} #{args.join(", ")})"
+          $gt = 'bool' if ['>','>=','==', '<=', '<', '!=', "&&"].index(name.to_s)
+          c = "(#{receiver} #{name} #{args.join(", ")})"
+          #p gt: $gt, c: c, n: name.to_s
+          c
         end
       end
     when :[] then
@@ -716,7 +845,22 @@ class Ruby2Ruby < SexpProcessor
       if ($procs||[]).index(receiver)
         "#{receiver}(#{args.join(", ")})"
       else
+        # @does Finds member type of +<var_name>[]+
         $gt = $gt.to_s[0..-3] if ($gt.to_s =~ /\[\]/) && $gta != :range
+
+        # @does replace resolved member type with return type of +type#get+ if exists
+        if agt = scope.get($gt.to_s+".get")
+          agt = nil if !['','var','void'].index(agt.to_s.strip)
+        else
+          qt = scope.declared?($gt.to_s) if $gt
+          if qt
+            rt=qt.declared?('get')
+            agt = rt if rt
+          end
+        end
+        
+        $gt = agt if agt
+        
         $gta=nil
         "#{receiver}[#{args.join(", ")}]"
       end
@@ -725,7 +869,8 @@ class Ruby2Ruby < SexpProcessor
       rhs = args.pop
       "#{receiver}[#{args.join(", ")}] = #{rhs}"
     when :"!" then
-      "(not #{receiver})"
+      $gt = 'bool'
+      "(!#{receiver})"
     when :"-@" then
       "-#{receiver}"
     when :"+@" then
@@ -738,7 +883,7 @@ class Ruby2Ruby < SexpProcessor
       receiver = "#{receiver}."         if receiver and not safe_call
       receiver = "#{receiver}&."        if receiver and safe_call
 
-      if ['p','puts'].index(name.to_s)
+      if ['p','puts'].index(name.to_s) && receiver.to_s! == ""
         name = 'print'
         if n_args.length == 1
           args="((#{n_args.join}).to_string()+\"\\n\")"
@@ -753,20 +898,25 @@ class Ruby2Ruby < SexpProcessor
       end
 
       if ((n=name.to_s) == "read") && (receiver.to_s.gsub(/\.$/,'') == "File") 
-        "new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents()"
+        "((string)new MappedFile#{args.gsub(/\)$/,', false)')}.get_contents())"
       elsif n=="nil!"
         $gt = receiver.to_s!.gsub(/\.$/,'')
         "null"
       elsif n=="empty!"
         $gt = receiver.to_t!.gsub(/\.$/,'')
         "{}"
+      elsif n=="as!"
+        $gt = (q=receiver.to_t!.gsub(/\.$/,''))
+        "(#{q} as #{args[1..-2]})"
       elsif n=="cast!"
         $gt = (q=receiver.to_t!.gsub(/\.$/,''))
         "((#{q})#{args})"
+      elsif n=="join" && (rgt.to_s! == 'string[]')
+         $gt='string'
+         "string.joinv#{args[0..-2]}, #{receiver.to_s.gsub(/\.$/,'')})"
       elsif (n == "read") && (receiver.to_s.gsub(/\.$/,'') == "DATA") 
         ($DATA[File.expand_path(exp.file)] || "").inspect
       elsif (n == "require")
-        return "" if $CTAGS
         s=scope
         p=$PROP
         fe=$FE
@@ -775,6 +925,8 @@ class Ruby2Ruby < SexpProcessor
         $scope << $scope[0]  
         ns=$ns
         if sxp=eval("q_require#{args}")
+          return "" if $CTAGS
+          
           f=$sao.pop
           $sao << sxp.file
           $req[sxp.file] = (process(sxp))
@@ -785,6 +937,12 @@ class Ruby2Ruby < SexpProcessor
         $ns=ns
         $PROP=p
         ''
+      elsif n == "override!"
+        $override = true
+        ""
+      elsif n == "new!"
+        $new = true
+        ""        
       elsif n == "index"
         $gt = :int
         """
@@ -805,22 +963,36 @@ class Ruby2Ruby < SexpProcessor
       elsif (n == "class") && (receiver.to_s.gsub(/\.$/,'') == 'this')
         ""
       elsif n == "new"
-        re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{args.to_s == "" ? '()' : args}"
-
-        fn=$gt
+        $gt=receiver.to_s.gsub(/\.$/,'')
+        if !['Object','GLib.Object', 'Value'].index($gt)
+          re="new #{$gt}#{args.to_s == "" ? '()' : args}"
+        else
+          re = args
+        end
         
-        if m=(scope.declared?(fn) || find_sym(rgt,fn))
+        fn=$gt
+      #  fn = receiver.to_s! if (!$gt) || ($gt==:var) || ($gt=='')
+        
+        fq = fn.split(".")[-1]
+        
+        ts=Scope.find(fq) do |x| x end
+
+        if (m=ts) || m=(scope.declared?(fq) || find_sym(rgt,fq))
+
           r_args.each_with_index do |q,i|
-            if t=m.args[i] && ("var" != m.args[i].to_s!)
+
+            if (t=m.args[i]) && ("var" != m.args[i].to_s!)
               
             else
-             
+              oa = ($args[j=fqn(ts)+".#{fq}"] ||= [])
+
               q = nil if q.to_s == 'var'              
-              q ||= scope.guess_type(n_args[i].to_s!)
+              q ||= (scope.guess_type(n_args[i].to_s!))
               q = nil if q.to_s == 'var'
-              m.args << (q)   
+              m.args << (q) 
+              oa[i] = q  
             end
-          end if n_args && m.is_a?(Scope)
+          end if n_args && m#.is_a?(Scope)
         end
 
         re
@@ -829,8 +1001,38 @@ class Ruby2Ruby < SexpProcessor
 
         re
       elsif n =~ /^new_/
-        re="new #{$gt=receiver.to_s.gsub(/\.$/,'')}#{".#{n.gsub(/^new_/, '')}"}#{args.to_s == "" ? '()' : args}"
+        nw = ''
+        nn = n
+        $gt = receiver.to_s.gsub(/\.$/,'')
+        if $gt && !$scope[0].map[$gt+".#{nn}"]
 
+          #if $gt != 'Object'
+            nn = n.gsub(/^new_/, '')
+            nw = "new "
+          #end
+        
+          re="#{nw}#{$gt}#{".#{nn}"}#{args.to_s == "" ? '()' : args}"
+        else
+          fn=$gt
+       
+          if m=(scope.declared?(fn) || find_sym(rgt,fn))
+            r_args.each_with_index do |q,i|
+              if t=m.args[i] && ("var" != m.args[i].to_s!)
+              
+              else
+                ts=Scope.find(fn) do |x| x end
+                oa = ($args[fqn(ts)+".#{fn}"] ||= [])
+                q = nil if q.to_s == 'var'              
+                q ||= (scope.guess_type(n_args[i].to_s!))
+                q = nil if q.to_s == 'var'
+                m.args << (q) 
+                oa[i] = q  
+              end
+            end if n_args && m.is_a?(Scope)
+          end
+          re = args
+        end
+        
         re
       elsif n == "GenericType"
         "#{n_args[0]}<#{n_args[1..-1].map do |a| a.to_s! end.join(",")}>"
@@ -855,40 +1057,58 @@ class Ruby2Ruby < SexpProcessor
       elsif n == "delegate"
           $DELG2 = []
           #push_sig n_args[0].to_s!, n_args[1].to_s!
-          #("public signal #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}") 
+          #("/**\n#{exp.comments}\n*/\npublic signal #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}") 
           "%s"     
       elsif n == "signal"
           $SIG2 = []
           #push_sig n_args[0].to_s!, n_args[1].to_s!
-          #("public signal #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}") 
+          #("/**\n#{exp.comments}\n*/\npublic signal #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}") 
           "%s"     
       
       elsif n == "property"
         $PROP = []
         if default = n_args[2]
           push_sig n_args[0].to_s!, n_args[1].to_s!
-          ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n get;set; default = #{default}; \n}")
+          ("/**\n#{exp.comments}\n*/\npublic #{n_args[1].to_s!} #{n_args[0].to_s!} {\n get;set; default = #{default}; \n}")
           
         else
           push_sig n_args[0].to_s!, n_args[1].to_s!
           push_sig "_"+n_args[0].to_s!, n_args[1].to_s!
           (scope.iface? ? '' : "private #{n_args[1].to_s!} _#{n_args[0].to_s!};\n")+
-          ("public #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
+          ("/**\n#{exp.comments}\n*/\npublic #{n_args[1].to_s!} #{n_args[0].to_s!} {\n %s \n}")
         end
       elsif n == "attr_accessor"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
-          ("public #{scope.iface? ? 'abstract ' : ''}%s #{a} { get; set; }")
+          a,b=a.split(": ")
+          c = b if b && b!=''
+          if c
+            t = scope.guess_type(c)
+            push_sig a, t
+          end
+          ("/**\n#{exp.comments}\n*/\npublic #{scope.iface? ? 'abstract ' : ''}#{c ? t : "%s"} #{a} { get; set; #{c ? "default = #{c} ;" : ''}}")
         end.join("\n")
-      elsif n == "attr_reader"
+      elsif n == "attr_reader"    
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
-          ("public #{scope.iface? ? 'abstract ' : ''}%s #{a} { get; #{scope.iface? ? '' : '' }}")
+          a,b=a.split(": ")
+          c = b if b && b!=''     
+          if c
+            t = scope.guess_type(c)
+            push_sig a, t
+          end            
+          ("/**\n#{exp.comments}\n*/\npublic #{scope.iface? ? 'abstract ' : ''}#{c ? scope.guess_type(c) : "%s"} #{a} { get; #{scope.iface? ? '' : '' } #{c ? "default = #{c} ;" : ''}}")
         end.join("\n")
       elsif n == "attr_writer"
         $PROP = n_args.map do |q| q.to_s! end
         $PROP.map do |a|
-          ("public #{scope.iface? ? 'abstract ' : ''}%s #{a} { set; }")
+          a,b=a.split(": ")
+          c = b if b && b!=''   
+          if c
+            t = scope.guess_type(c)
+            push_sig a, t
+          end       
+          ("/**\n#{exp.comments}\n*/\npublic #{scope.iface? ? 'abstract ' : ''}#{c ? scope.guess_type(c) : "%s"} #{a} { set; }")
         end.join("\n")        
       elsif n == "to_s"
         $gt=:string
@@ -915,26 +1135,39 @@ class Ruby2Ruby < SexpProcessor
           "(double)#{r}#{name}"
         end 
       elsif n == "namespace"
-        "namespace #{n_args[0]}"
+        "" #"namespace" #{n_args[0]}"
           
       else
         s=scope
+        h=nil
         until !s.is_a?(LocalScope)
+          h=s
           s=s.parent
         end
         
+        s=h
+        
         fn=name.to_s!
         
-        if m=(s.declared?(fn) || find_sym(rgt,fn))
+        sm = Scope.find(rgt) do |x| x end
+        sm = sm.map[fn] if sm
+        
+        if (m=sm) || (m=((s ? s.parent.declared?(fn) : nil) || find_sym(rgt,fn))) #&& m.is_a?(Scope)
+          oa = ($args[k=fqn(m)+".#{fn}"] ||= []) if m.is_a?(Scope)
+ 
           r_args.each_with_index do |q,i|
-            if t=m.args[i] && ("var" != m.args[i].to_s!)
+            if (t=m.args[i]) && (!["var", :var, nil, ""].index(m.args[i].to_s!))            
+              m.args[i] = t
               
             else
-             
               q = nil if q.to_s == 'var'              
-              q ||= scope.guess_type(n_args[i].to_s!)
+
+              q ||= (scope.guess_type(n_args[i].to_s!))
+              
               q = nil if q.to_s == 'var'
-              m.args << (q)   
+             
+              oa[i] = q
+              m.args[i] = q
             end
           end if n_args && m.is_a?(Scope)
         end
@@ -949,7 +1182,11 @@ class Ruby2Ruby < SexpProcessor
         gt = '' if gt.to_s == 'var.'
 
         gt = scope.guess_type(x=gt+n).to_s
-     
+        if name.to_s == "test"
+          if receiver.to_s.gsub(/\.$/,'').to_s =~ /FileUtils/
+            gt = :bool
+          end
+        end
         $gt=gt
         s
       end
@@ -957,7 +1194,7 @@ class Ruby2Ruby < SexpProcessor
   ensure
     @calls.pop
   end
-
+$args={}
   def process_safe_call exp # :nodoc:
     process_call exp, :safe
   end
@@ -1077,10 +1314,14 @@ class Ruby2Ruby < SexpProcessor
     args = "" if args == "()"
 
     if $SIG
+    $args[z=fqn(scope)+".#{name}"]=[]
       args.gsub(/(^\()|(\)$)/,'').split(",").each_with_index do |q,i|
-        scope.map[q.to_s.strip.to_s!.split("=")[0]] = $SIG[0][i].to_s! 
+        scope.map[q.to_s.strip.to_s!.split("=")[0]] = tt=$SIG[0][i].to_s! 
+        ($args[z=fqn(scope)+".#{name}"]) << tt
       end
     end
+    
+    ds = $SIG[0] if $SIG
 
     body = s() if body == s(s(:nil)) # empty it out of a default nil expression
 
@@ -1105,15 +1346,17 @@ class Ruby2Ruby < SexpProcessor
     end
 
     static = name =~ /^this\./
+    static = true if scope.parent == $scope[0]
     name = name.to_s.split(".")[-1]
     scope.name = name
-
     m_args = rs = $scope[0].map["#{scope.parent.name}.#{name.to_s}"]
     if m_args.is_a?(Scope)
       m_args = m_args.args
     else
       m_args=nil
     end
+    
+    m_args = $args[fqn(scope)+".#{name}"]
     
     if static && (name=='main')
       m_args=[]
@@ -1126,14 +1369,28 @@ class Ruby2Ruby < SexpProcessor
     
     args = "()" if (!args) || (args=='')
     args=args.gsub(/\(|\)/,'').split(",")
+    argt = args
     i=-1
-    args="("+args.map do |q| i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i].to_t! : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t if (t.to_s != 'var') && !scope.declared?(q);x; end.join(", ")+")" if args!="()"    
+
+    ai=-1
+    args="("+args.map do |q| 
+      if ds
+        ai+=1
+        ff=ai
+        next ds[ff]+" #{q}" if ds[ff]
+      end
+    i+=1; x="#{t=m_args ? (m_args[i] ? m_args[i].to_t!+"" : scope.map[q.strip.to_s!].to_t!) : scope.map[q.strip.to_s!].to_t!} #{q=q.to_s!.strip}";scope.map[q.to_s!.strip.split("=")[0].strip]=t if (t.to_s != 'var') && !scope.declared?(q);x; end.join(", ")+")" if args!="()"    
     args.gsub("  ", " ")
 
     body = body.map { |ssexp|
       process ssexp
     }
-
+    
+    if $CTAGS || $JS
+      argt=args.gsub(/\(|\)/,'').split(",")
+      argt = argt.map do |ct| Scope.find(tc=ct.split(" ")[-2]) do |s| fqn(s) if s end || tc end
+    end
+    
     simple = body.size <= 1
 
     body << "// do nothing" if body.empty?
@@ -1167,39 +1424,111 @@ class Ruby2Ruby < SexpProcessor
   
     $scope << $scope[-2] #unless $SIG2 || $DELG2
 
+    virtual = (( true || $SIGNAL || $SIG2) && (body.gsub(/\/\/.*\n?/,"").strip!='')) 
+    
+
+
+    is_const = (name == $klass.to_s) || (name =~ /#{$klass.to_s}\./) 
+
+    virtual = false if (is_const || static) #|| (body.gsub(/\/\/.*\n?/,"").strip!=''))
+    
+    kind = :method
+    kind = :function if static
+    kind = :constructor if is_const
+    kind = :signal if $SIG2
+    kind = :delegate if $DELG2
+
     push_sig(name.to_s, type) unless $PROP 
     scope.map[name.to_s] = type
-    $CTAGS << [name.to_s, exp.line] if $CTAGS
-    $scope.pop #unless $SIG2 || $DELG2
+
     type=type.to_s!
+    rbn = name.to_s
+    if name.to_s == $klass.to_s
+      rbn = 'initialize'
+    end
+    $CTAGS << {file: exp.file, comments: exp.comments, symbol: name.to_s, line: exp.line, parent: $scope[-3].is_a?(LocalScope) ? nil : fqn($scope[-3]), kind: kind, virtual: !!virtual, ruby: rbn , return_type: type, args: argt} if $CTAGS && ! $PROP
+    $scope.pop #unless $SIG2 || $DELG2
+    
     i=-1
 
     scope.qargs.push(*args[1..-2].split(",").map do |qq| qq.split(" ")[0] if qq.split(" ")[1] end.find_all do |qq| qq end) if scope.qargs.empty?
 
     scope.return_type = type
-
+    qs=scope
     $scope.pop 
-     
-    virtual = (($SIGNAL || $SIG2) && (body.gsub(/\/\/.*\n?/,"").strip!='')) 
-     
+    override = $override
+    virtual = false if override || $PROP || static
+    new = $new
+    virtual = false if new || $PROP || static
+    $override=nil
+    $new = nil
     blk = " {\n#{dec}#{body}\n}"
     c = ''
     c =  "// #{exp.file}: #{exp.line}\n//\n" if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
     blk = '' if (($SIG2 || $SIGNAL) && !virtual) || $DELG2
     rt=type.to_t!.gsub(//,'') 
-    r="\n#{c}#{comm}public #{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{rt}#{$ret_nil ? (rt.to_s !~ /\?$/ ? '?' : '') : ''}" : ''} #{name}#{args}#{($DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
+    abs = true if qs.parent.is_iface && !static && !virtual 
+    if abs
+      abs = false unless body.strip =~ /\/\/ do nothing;/
+      body = "" if abs
+    end
+    
+    static = false if ($SIG2 || $SIGNAL)
+    r="\n#{c}#{comm}public #{abs ? 'abstract ' : ''}#{new ? 'new ' : ''}#{override ? 'override ' : ''}#{static ? 'static ' : ''}#{virtual ? 'virtual ' : ''}#{($SIG2 || $SIGNAL) ? 'signal ' : ''}#{($DELEGATE || $DELG2) ? 'delegate ' : ''}#{name != $klass.to_s ? "#{rt}#{$ret_nil ? (rt.to_s !~ /\?$/ ? '?' : '') : ''}" : ''} #{name}#{args}"
+    r = "construct" if r =~ /public static void new\(/
+    r=r+"#{(abs || $DELEGATE || ($SIGNAL && (body.strip==''))) ? '' : blk}".gsub(/\n\s*\n+/, "\n\n")
     $SIGNAL=$DELEGATE=false
     $gt=nil
 
-    raise "Infered return type or return in void function, line: #{exp.line}" if $did_ret && ([nil,'',"void","var", "error"].index(rt))
+    if $did_ret && ([nil,'',"void","var", "error"].index(rt)) && $CTAGS
+      $CTAGS.last[:return_type] = :infered
+    end
+
+    raise "Infered return type or return in void function, line: #{exp.line}" if $did_ret && ([nil,'',"void","var", "error"].index(rt)) unless $CTAGS
     $return = nil
     $ret_nil=false
     $did_ret=nil
+
+    if $JS
+      i=-1
+      jargs = argt.map do |t|
+        case t.to_s
+        when "int"
+          b='(int)'
+          q='double'
+        when "double"
+          q="double"
+        when "bool"
+          q="boolean"
+        when "string"
+          q="string"
+        else
+          next "(#{t})(jsc.omap[args[#{i+=1}]] ?? args[#{i}])"
+        end
+        "#{b}args[#{i+=1}].to_#{q}()"
+      end.join(", ")
+    
+      s = scope
+      s = $scope[-2] if !s.name || (s.name=='')
+    
+      $JS << """
+        /*
+        *  Wraps #{s.name}##{name} to javascript
+        */
+        jsc.jsc.add_method(\"#{name}\", (wrapped, args) => {
+          var o = ((#{s.name})wrapped).#{name}(#{jargs})
+          if (typeof(#{rt}).is_object()) { Q.JSClass.ensure_wrapper(c,(Object)o);}
+          return o;
+        }, typeof(#{rt}));
+      """
+    end
+
     r
   end
 
   def push_sig n, t
     $scope[0].map[k="#{scope.name}."+n.to_s] = t
+    $scope[0].map[k="#{fqn(scope)}."+n.to_s] = t
   end 
 
   def process_defs exp # :nodoc:
@@ -1240,7 +1569,7 @@ class Ruby2Ruby < SexpProcessor
 
     options = re_opt rest.pop if Integer === rest.last
 
-    "/" << util_dthing(:dregx, s(:dregx, str, *rest)) << "/#{options}"
+    "new GLib.Regex(@\"" << util_dthing(:dregx, s(:dregx, str, *rest)) << "\")#{options}"
   end
 
   def process_dregx_once(exp) # :nodoc:
@@ -1303,18 +1632,24 @@ class Ruby2Ruby < SexpProcessor
 
     $scope << LocalScope.new($scope[-1])
     recv = process recv
+    gt = $gt
+    gt ||= scope.guess_type(recv)
+    
     if $gta ==:range
       rng = true
     end
-    iter = process iter
+    
+    iter = iter[1].to_s
+    scope.map[iter] = (gt || :var)
     body = process(body) || "// do nothing"
     
-    result = ["var q_#{qn=recv.to_s!.split(".")[-1].gsub(/\(.*?\)/,'')} = #{recv};\n","for (var #{iter.gsub("var ",'')}_n=0; #{iter.gsub("var ",'')}_n < q_#{qn}.length; #{iter.gsub("var ",'')}_n++) {\n"]
+    result = ["for (var #{iter.gsub("var ",'')}_q_n=0; #{iter.gsub("var ",'')}_q_n < #{recv.to_s!}.length; #{iter.gsub("var ",'')}_q_n++) {\n"]
 
-    result << indent("var #{iter.gsub("var ",'')} = q_#{qn}[#{i=iter.gsub("var ",'')}_n];")
+    result << indent("#{gt.to_s!.gsub(/\[\]/,'')} #{iter.gsub("var ",'')} = #{recv.to_s!}[#{i=iter.gsub("var ",'')}_q_n];")
     if rng
       result = []
-      result << "for (var #{i} = #{recv.to_s!.split(":")[0]}; #{i}<=#{recv.to_s!.split(":")[1..-1].join(":")};#{i}++) {"
+      scope.map[i]='int'
+      result << "for (int #{i} = #{recv.to_s!.split(":")[0]}; #{i}<=#{recv.to_s!.split(":")[1..-1].join(":")};#{i}++) {"
     end
     result << indent(fmt_body(body,exp))
     $scope.pop
@@ -1347,20 +1682,30 @@ class Ruby2Ruby < SexpProcessor
 
   def process_hash(exp) # :nodoc:
     _, *pairs = exp
-
+    map = {} if call=$call
+    $call = nil
+    co = $co
+    $co=nil
+    
     result = pairs.each_slice(2).map { |k, v|
       if k.sexp_type == :kwsplat then
         "%s" % process(k)
       else
         t = v.sexp_type
-
+        
         lhs = process k
         rhs = process v
-        rhs = "(#{rhs})" unless HASH_VAL_NO_PAREN.include? t
+        rhs = "(#{rhs})" unless HASH_VAL_NO_PAREN.include?(t) || (map && co)
 
-        "%s => %s" % [lhs, rhs]
+        map[lhs] = rhs if map
+
+        "%s: %s" % [lhs[1..-1], rhs]
       end
     }
+
+    if map
+      return "  #{co}.#{call}(typeof(#{map.delete(":typeof")}), #{map.map do |k,v| "\"#{k[1..-1]}\", #{v}" end.join(", ")})  " if ['Object','GLib.Object'].index(co)
+    end
 
     result.empty? ? "{}" : "{ #{result.join(", ")} }"
   end
@@ -1373,7 +1718,9 @@ $gt=nil
     if rhs then
       q="#{lhs} = #{r=process(rhs).to_s!}"
       s=scope
+      h=nil
       until !s.is_a?(LocalScope)
+        h=s
         s=s.parent
       end
       if t=scope.declared?(a=lhs.gsub(/^this\./,''))
@@ -1381,7 +1728,10 @@ $gt=nil
       else
         t=s.assign((zq=(scope.name+"."+a).gsub(/^\./,'')),(r),scope)
 
- 
+        if $CTAGS
+          $CTAGS << {file: exp.file, comments: exp.comment, line: exp.line, symbol: a, parent: fqn(s), kind: :field, return_type: t.to_s!, ruby: a}
+        end
+        
         s.fields[a]=t if b = t!=:var
         $delete << zq 
       end
@@ -1393,13 +1743,22 @@ $gt=nil
   end
 
   def process_if(exp) # :nodoc:
-    
     _, c, t, f = exp
     z=c
     expand = Ruby2Ruby::ASSIGN_NODES.include? c.sexp_type
 
     c = process c
-
+    
+    # DOES: ivar lookup type for bool equality
+    if c=~/^this\./
+      if c.split(".").length == 2
+        $gt = scope.guess_type(c)
+      end
+    end
+    
+    if $gt.to_s != "bool"
+      c = "(#{c}) != null"
+    end
 
     c = "(#{c.chomp})" if c =~ /\n/
 
@@ -1421,6 +1780,12 @@ $gt=nil
         return r if r and (@indent + r).size < LINE_LENGTH and r !~ /\n/
       end
 
+      if c =~ /\(\"(#{exp.file})\" \=\= GLib\.Environment\.get_prgname\(\)\)/
+        #p prg: $prg, file: exp.file
+        return indent(t) if $1 == $program
+        return ""
+      end
+      
       r = "if (#{c}) {\n#{indent(t)};\n"
       r << "} else {\n#{indent(f)};\n" if f
       r << "}"
@@ -1450,7 +1815,7 @@ $gt=nil
       next q+";" if (q.strip =~ / \= \{/) && (q.strip !~ /;/)
       z=if q.strip !~ /(\;$)|(\}$)/              
         if q.strip !~ /\{$/
-          (q.strip=='') ? q : q+";"
+          (q.strip=='' || (q.strip=~/^\*/)) ? q : q+";"
         else
           q
         end
@@ -1523,7 +1888,7 @@ $gt=nil
       result << " {"
     else
       if $PROP || $SIG2 || $DELG2
-        
+
       else
 
         iter << "(" if (iter !~ /\)$/) && !$FE
@@ -1534,17 +1899,19 @@ $gt=nil
           dd={}
 
           if !fet
+
           q=iter.gsub(/\($/,'').gsub(/^this./,'').split(".")
+          
           a=scope.guess_type(q[0])
           q.shift
           q.unshift a
+
           s=(Scope.find(a) do |x| x.get(q[1]) if x end) 
           s||=(Scope.find(fqn(a)) do |x| x.get(q[1]) if x end) if a.is_a?(Scope)
           s||=(Scope.find(a.to_s.split(".")[1]) do |x| x.get(q[1]) if x end) if !a.is_a?(Scope)
           s||=(Scope.find(fqn(a.name.split(".")[1])) do |x| x.get(q[1]) if x end) if a && a.is_a?(Scope) rescue nil
-          p iter: iter, q: q[0].to_s 
 
-
+         # a=q[0] if a.is_a?(Scope) && (a.name =~ /connect/) 
           if (s||=a).is_a?(Scope)
        
             args.split(",").each_with_index do |qa,i|
@@ -1552,28 +1919,24 @@ $gt=nil
               #g=dd[qa.strip] = Scope.find(qt=s.qargs[i]) do |qs| qs if qs end
               #dd[qa.strip] = nil if dd[a.to_s.strip]==""
               dd[h=qa.strip] = qt=s.qargs[i]
-            #  p gmap: [qt.to_s] if g.name if g
-              p qiter: q, sq: s.qargs
-         
+            #  p gmap: [qt.to_s] if g.name if g         
             end
-
-
           end
+          
           else
             dd[fetn] = fet
           end
           dd.each do |vv,tt| 
-          p gmap: [vv.to_s,tt.to_s]
           scope.map[vv] = tt end
           $gt=nil
           body = process body if body
 
           d = scope.map.map do |k,v| 
-            p ddk: dd.keys, k: k
+          
             next if dd[k]
             next if v.to_s! == "var"; 
             next if args.split(",").map do |vq| vq.strip end.index(k) # Error
-            "#{v} #{k}#{['long','int','uint','double'].index(v.to_s!) ? '' : " = null;"}" end.join("\n")+"\n"
+            "#{v} #{k}#{['long','int','uint','double', 'Value'].index(v.to_s!) ? '' : " = null;"}" end.join("\n")+"\n"
           body = d+body
          
           #p qiter: q, sq: dd.keys, smap: as.map
@@ -1588,12 +1951,21 @@ $gt=nil
     body = fmt_body(body.strip)
     
     if $PROP || $SIG2 || $DELG2
-      q="#{iter.to_s! % t=body.strip.gsub(";",'').to_s!}".gsub("public void",'').gsub("get() {\n","\nget {").gsub("set() {\n", "\nset {").strip.split("\n")
+      t=body.strip.gsub(";",'').to_s!
+      wa = []
+      iter.to_s!.split("\n").each do wa << t end
+      
+      q="#{sprintf(iter.to_s!, *wa)}".gsub("public void",'').gsub("get() {\n","\nget {").gsub("set() {\n", "\nset {").strip.split("\n")
       qq=""
   
       i=-1
       a = ($PROP || (($SIG2 || $DELG2) ? [] : nil)) 
       a.each do |q|
+        if $PROP
+          if $CTAGS
+            $CTAGS << {file: exp.file, comments: exp.comments, kind: :property, symbol: q, ruby: q, parent: fqn($scope[-1]), line: exp.line, return_type: t.to_s!}
+          end
+        end
         push_sig q,t.to_s!
         push_sig "_"+q,t.to_s!
       end
@@ -1649,7 +2021,9 @@ $gt=nil
 
   def process_ivar(exp) # :nodoc:
     _, name = exp
-    name.to_s.gsub("@",'this.')
+    n=name.to_s.gsub("@",'this.')
+    $gt = scope.guess_type(n) 
+    n
   end
 
   def process_kwsplat(exp)
@@ -1661,17 +2035,23 @@ $gt=nil
 
   def process_lasgn(exp) # :nodoc:
     _, name, value = exp
-
+    
     s=""
     if (t= (scope.assign(name, pv=process(value)))).to_s!.to_t! == 'var'
 
 
      s += "var "
     end
-
+    
+    if value
+      q=" = #{pv}"
+      q = "" if (pv.to_s! == 'null') && ["Pid","int","float","double","uint"].index(t.to_s!)
+      d=true if q==""
+    end
+    
     $gt = t
-    s += "#{name}"
-    s += " = #{pv}" if value
+    s += "#{name}" unless d
+    s += q if value
     s
   end
 
@@ -1686,6 +2066,7 @@ $gt=nil
       $gt = 'Regex'
       obj.inspect
     else
+
       obj.inspect
     end
   end
@@ -1759,9 +2140,11 @@ $gt=nil
   end
 
   def process_module(exp) # :nodoc:
-    q=$NS ? '' : 'public interface '
+    q=$NS ? 'namespace ' : 'public interface '
     $NS=false
-    "#{exp.comments}#{q}#{util_module_or_class(exp)}" 
+    r="/**\n#{exp.comments}\n*/\n#{q}#{util_module_or_class(exp)}" 
+
+    r
   end
 
   def process_next(exp) # :nodoc:
@@ -1781,7 +2164,10 @@ $gt=nil
 
   def process_not(exp) # :nodoc:
     _, sexp = exp
-    "(!#{process sexp})"
+
+    c="(!#{process sexp})"
+    $gt = 'bool'
+    c
   end
 
   def process_nth_ref(exp) # :nodoc:
@@ -1844,7 +2230,9 @@ $gt=nil
   def process_or(exp) # :nodoc:
     _, lhs, rhs = exp
 
-    "(#{process lhs} || #{process rhs})"
+    c="(#{process lhs} || #{process rhs})"
+    $gt='bool'
+    c
   end
 
   def process_postexe(exp) # :nodoc:
@@ -1912,7 +2300,7 @@ $gt=nil
     _, rhs = exp
 
     unless rhs then
-      "break"
+      "return"
     else
       rhs_type = rhs.sexp_type
       rhs = process rhs
@@ -1979,7 +2367,12 @@ $gt=nil
   end
 
   def process_self(exp) # :nodoc:
-    "this"
+    s=scope
+    until !s.is_a?(LocalScope)
+      s=s.parent
+    end
+    $gt = fqn(s)
+   "this"
   end
 
   def process_splat(exp) # :nodoc:
@@ -2003,8 +2396,19 @@ $gt=nil
     args = args.map { |arg|
       process arg
     }
+    
+    if $scope[-1].name != $scope[-2].name
+      sc=($scope[-2].superclass+"."+scope.name)
+      
+      s = type_by_path(sc)
+      
+      $gt = s.return_type
 
-    "base.#{$scope[-1].name}(#{args.join ", "})"
+      return "base.#{$scope[-1].name}(#{args.join ", "})" 
+      p $scope[-2].superclass
+    end
+  
+    "base(#{args.join ", "})"
   end
 
   def process_svalue(exp) # :nodoc:
@@ -2022,6 +2426,7 @@ $gt=nil
   end
 
   def process_true(exp) # :nodoc:
+        $gt='bool'
     "true"
   end
 
@@ -2305,26 +2710,31 @@ $gt=nil
     
     scope.parent.map[name.to_s] = scope
     
-    $CTAGS << [name.to_s, exp.line] if $CTAGS
-    
+
     result << name
     result << "<#{$generics.join(", ")}>" if $klass && $generics
 
     $incl=[];
     if superk then
       superk = process superk
-      $incl << superk if superk
-      scope.superclass = superk if superk
+      
+      $WEB_EXT = fqn(scope) if superk && (superk.to_s == "Q.WebExtension") && exp.file==$rb_prg
+      $incl << superk if superk #&& !((superk.to_s == "WebKit.WebExtension") && $WEB_EXT)
+      scope.superclass = superk #if superk && !((superk.to_s == "WebKit.WebExtension") && $WEB_EXT)
     end
 
     q="%s {\n"
-
+    ns = $ns
+    $ns=false
     body = body.map { |sexp|
       process(sexp).chomp
     }
     
     result << (q % ("#{$incl.empty? ? '' : " : "}"+$incl.join(", ")))
     scope.includes.push *$incl 
+    $CTAGS << {file: exp.file, comments: exp.comments, symbol: name.to_s, line: exp.line, parent: ($scope[-2].is_a?(LocalScope) || $scope[-2].is_a?(RootScope)) ? nil : fqn($scope[-2]), kind: is_class ? :Class : (!ns ? :Module : :Namespace), superclass: superk, includes: scope.includes.map do |ct| Scope.find(ct) do |s| fqn(s) if s end || ct end} if $CTAGS
+    $ns=false
+    $NS=false
 $incl = []
     body = unless body.empty? then
              indent(fmt_body(body.find_all do |q| q end.map do |q| (q.strip =~ /^\}$/) ? q+"\n" : q end.join("\n"))) + "\n"
@@ -2342,6 +2752,17 @@ $incl = []
       end
       result << indent("// END infered @<var>\n\n")+"\n\n"
     end
+
+    if $JS
+      result << """
+      #{$JS}
+      }
+      """
+      
+      $JS=nil
+    end
+    
+
 
     result << body
     result << "}"

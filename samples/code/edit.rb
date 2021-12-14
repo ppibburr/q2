@@ -1,7 +1,11 @@
 require pkg: 'gtksourceview-3.0'
 require pkg: 'gtk+-3.0'
+require pkg: 'gio-2.0'
 
-namespace module Qode
+require q: '/home/ppibburr/json.rb'
+
+namespace
+module Qode
   class FindTextDialog < Gtk::Window
     signal() {
       def find q;end
@@ -21,7 +25,7 @@ namespace module Qode
       
       delete_event.connect() do
         hide()
-        next false   
+        next true
       end
     end
     
@@ -39,7 +43,7 @@ namespace module Qode
       @title = "GoTo Line"
       
       h=Gtk::Box.new(Gtk::Orientation::VERTICAL, 0)
-      h.pack_start(@q=Gtk::SpinButton.new_with_range(0, 16, 1), false,false,0)
+      h.pack_start(@q=Gtk::SpinButton.new_with_range(0, 16000, 1), false,false,0)
             
       add(h)
       
@@ -62,6 +66,7 @@ namespace module Qode
     def initialize
       @title = "Replace Text"
       
+      
       h=Gtk::Box.new(Gtk::Orientation::VERTICAL, 0)
       h.pack_start(@q=Gtk::Entry.new(), false,false,0)
       h.pack_start(@w=Gtk::Entry.new(),false,false,0)
@@ -80,7 +85,7 @@ namespace module Qode
     end
     
     def activate; 
-      repl(q.text, "#{w.text}")
+      repl(@q.text, "#{w.text}")
       hide()
     end
   end
@@ -90,18 +95,31 @@ namespace module Qode
     
     property(:source_buffer, Gtk::SourceBuffer) {
       def get
-        return `get_buffer() as Gtk.SourceBuffer`
+        return Gtk.SourceBuffer.cast!(get_buffer())
       end
     }
 
     property(:search_text, :string) {
       def get
-        return @search.settings.search_text
+       
+        if !@search.settings.search_text
+          return ""
+        else
+          return @search.settings.search_text
+        end
       end
     }
     
     def initialize()
+      set_wrap_mode(Gtk::WrapMode::NONE)
+    
+      provider = Gtk::CssProvider.new();
+      provider.load_from_data("textview { font-family: Monospace; font-size: 10pt; }",  -1);
+      get_style_context().add_provider(provider,Gtk::STYLE_PROVIDER_PRIORITY_USER)
+    
       @search  = Gtk::SourceSearchContext.new(source_buffer, nil)        
+
+      search.settings.search_text = ""
 
       @repl = ReplaceTextDialog.new()
       @repl.repl.connect() do |q,w|
@@ -126,7 +144,7 @@ namespace module Qode
 
       get_completion().add_provider(@_autocomplete)      
 
-      set_wrap_mode(Gtk::WrapMode::WORD);
+      set_wrap_mode(Gtk::WrapMode::NONE);
       @buffer.text = "";
      
       @show_line_numbers = true
@@ -139,7 +157,7 @@ namespace module Qode
       @_scheme = 0
       @_scheme = -1
 
-      source_buffer.style_scheme = Gtk::SourceStyleSchemeManager.get_default().get_scheme('kate')
+      source_buffer.style_scheme = Gtk::SourceStyleSchemeManager.get_default().get_scheme('tango')
      
       @language_manager = Gtk::SourceLanguageManager.get_default();
 
@@ -148,7 +166,6 @@ namespace module Qode
       connect_keys()
       
       source_buffer.modified_changed.connect() do 
-        puts "modified"
         modify()
       end
     end
@@ -157,7 +174,7 @@ namespace module Qode
     @_scheme = @_scheme+1
     sm=Gtk::SourceStyleSchemeManager.get_default()
     ids=sm.get_scheme_ids()
-    @_scheme = 0 if @_scheme >= ids.length    
+    @_scheme = 0 if @_scheme >= ids.length   
     id = ids[@_scheme]
     p "id: #{id}"
     source_buffer.style_scheme = sm.get_scheme(id)
@@ -190,6 +207,12 @@ namespace module Qode
             show_repl()
             next true;
           end
+
+          if event.key.keyval == Gdk::Key::t
+            p "show_tags"
+            show_tags()
+            next true;
+          end
         end
         
         next false
@@ -213,7 +236,7 @@ namespace module Qode
       buffer.get_selection_bounds(out(start), out(e))
       selected = buffer.get_text(start, e, true)
     
-      if (replace_new_line)
+      if (!!replace_new_line)
         return selected.chomp().replace("\n", " ")
       end
 
@@ -249,7 +272,7 @@ namespace module Qode
       @end_iter     = Gtk::TextIter?.nil!
       end_iter_tmp = Gtk::TextIter?.nil!
       
-      if buffer != nil
+      if buffer
         source_buffer.get_selection_bounds(out(start_iter), out(end_iter));
         s=end_iter
         @end_iter = end_iter_tmp
@@ -269,7 +292,7 @@ namespace module Qode
       source_buffer.get_iter_at_offset(out(start_iter), source_buffer.cursor_position);
       search.settings.search_text = q
      
-      if perform_search(start_iter)
+      if !!perform_search(start_iter)
         search.replace2(start_iter, end_iter, w, w.length)
       end
     end      
@@ -290,22 +313,45 @@ namespace module Qode
 
       return contains
     end
+    
+    def show_tags()
+      b=Gtk::TextBuffer.cast!(source_buffer)
+      t=b.text
+      
+      if @tw
+        @tw.destroy()
+      end
+      
+      @tw = Q::TagWindow.new()
+      
+      @tw.view.activate.connect() do |tag|
+        go_to(0, tag.line)
+      end
+      
+      @tw.spawn(t)
+    end
 
-    signal() { def modify();end}
+    signal() { 
+      def modify();end
     
-    signal() { def show_find();
-      @finder.q.text = search_text
-      @finder.show_all()    
-    end }
-    
-    signal() { def show_goto();
-      @go2.show_all()    
-    end }
-    
-    signal() { def show_repl()
-      @repl.q.text = search_text
-      @repl.show_all()
-    end }
+      def show_find();
+        @finder.q.text = @search_text
+
+        @finder.show_all()   
+        @finder.present()
+      end
+      
+      def show_goto();
+        @go2.show_all()  
+        @go2.present()  
+      end
+      
+      def show_repl()
+        @repl.q.text = @search_text
+        @repl.show_all()
+        @repl.present()
+      end
+    }
   end
 end
 

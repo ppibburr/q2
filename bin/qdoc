@@ -1,0 +1,19 @@
+#!/usr/bin/env ruby
+$VERBOSE=nil
+
+path = path = File.symlink?(__FILE__) ? File.readlink(__FILE__) : __FILE__
+$: << File.join(File.dirname(path), "/../lib")
+
+require 'qdoc'
+
+q = File.dirname(path)+"/q"
+
+doc (`#{q} --tags #{ARGV[0]}`.split("\n").map do |j| JSON.parse(j) end), ARGV
+
+`mkdir -p ./q_generated/qdoc`
+
+File.open(out="./q_generated/qdoc/#{File.basename(ARGV[0])}", "w") do |f|
+  f.puts $DOC
+end
+
+system "yardoc #{out}"

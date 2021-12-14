@@ -1,63 +1,43 @@
 #!/usr/bin/env ruby
-
+$VERBOSE = nil
 $t=Time.now
-$: << File.join(File.dirname(__FILE__), "/../lib")
-require 'rubygems'
+path = path = File.symlink?(__FILE__) ? File.readlink(__FILE__) : __FILE__
+$: << File.join(File.dirname(path), "/../lib")
+
 require 'ruby2vala'
 require 'ruby_parser'
+require 'stub'
 
-$h ||= false
-$s ||= false
-$first = ARGV.index('-f')
-if $h then
-  puts "usage: #{File.basename $0} [options] [file...]"
-  puts "options:"
-  puts "-h     : display usage"
-  puts "-s     : print the sexp before displaying the translated ruby"
-
-  exit 1
-end
-
-$i = ARGV.delete("-i")
-
-$CTAGS = [] if ARGV.delete("--ctags")
-
-$run = ARGV.delete("-r")
-$exe = ARGV.index("-e")
-ARGV.delete_at $exe if $exe
-$c = ARGV.delete_at($exe) if $exe
-$run = true if $c
-ARGV << "%s" if $exe
-$shared = ARGV.delete("--lib")
-$shared ||= $gir = ARGV.delete("--gir")
-$pkg = []
-
-while i=ARGV.index("--pkg")
-  ARGV.delete_at(i)
-  $pkg << ARGV.delete_at(i)
-end
-
-
-ARGV.push "-" if ARGV.empty? && !$c
-
-$parser = parser    = RubyParser.new
-ruby2ruby =$r2v= Ruby2Ruby.new
-$delete = []
-$scope = [r=Scope.new]
-r.map['string.split'] = 'string[]'
-$sa = sa={}
-$ruby = []
-$one=nil
-$req = {}
 class Sexp
   def mb;@mb;end
   def mb=q;@mb=q;end
 end
+
+def vapi scope
+scope.map.map do |k,v|
+  if v.is_a?(Scope)
+    if v.namespace?
+      "namespace #{v.name} {"+
+        vapi(v)
+      "}"
+    elsif v.class?
+      "public class #{v.name} {"+
+        vapi(v)
+      ""
+      
+    else 
+      v.name
+    end
+  end
+end.join("\n")
+end
+
 def r2vala sexp
   $mb=false
+
   l=$req[sexp.file] = $r2v.process(sexp)
-  if $mb
   
+  if $mb && !$shared && !$gir && (sexp.file == $program)
     q=$scope[-1].map.map do |k,v|
       (v.to_s! == "var") ? "" : "#{v} #{k};"
     end.join("\n  ").strip
@@ -67,7 +47,27 @@ def r2vala sexp
     $scope.pop if $scope[-2] == $scope[0]
     l.gsub!(/\%__Q_MAIN_DEC__;/,"  "+q)
     l << "\n  return 0;\n}"
+  else
+    l.gsub!(/\%__Q_MAIN_DEC__;/,"")  
   end
+  
+
+    if $WEB_EXT && ($WEB_EXT!=true)
+      l << """
+      
+public static void webkit_web_extension_initialize_with_user_data(WebKit.WebExtension extension, Variant?  data) {
+  new #{$WEB_EXT}(extension, data);
+}
+
+public static void webkit_web_extension_initialize(WebKit.WebExtension extension) {
+  new #{$WEB_EXT}(extension, null);
+}
+
+      """
+      
+      $WEB_EXT = nil
+    end
+  l
 end
 
 def output
@@ -91,23 +91,55 @@ def write
   a.push(q) if !$Q.empty?
   a
 end
-
+$libs = []
 def compile f, prg=$prg
+  STDERR.puts "\e[1mCompiling...\e[0m"
   pkg = '' #if !$pkg or $pkg.empty?
   
   unless !$pkg || $pkg.empty?
     pkg << " --pkg "
     pkg << $pkg.join(" --pkg ")
   end
-  
+
   lib=prg
-  lib = prg.split("_").map do |q| q.capitalize end.join() if $gir
+  lib = prg.split("_").map do |q| q.capitalize end.join() if false#$gir
   l = ""
-  l = " --library=#{lib} -H #{prg}.h -X -fPIC -X -shared" if $shared
+  l = " --library=#{lib} -H ./q_generated/#{prg}/#{prg}.h -X -fPIC -X -shared -X -I./" if $shared
   l << " --gir #{lib}-0.1.gir" if $gir
-  prg = prg+".so" if $shared
-  STDERR.puts c="valac#{l} #{f.join(" ")}#{pkg} -o #{prg}"
-  system c
+  gir = stub lib if $gir
+  e = "./ext/#{prg}/lib/" if $gir
+  
+  $plugin_name = prg if $plugin  
+  $shared_lib  = prg = "lib"+prg+".so" if $shared
+  
+  ld = []
+  lrp=[]
+  STDERR.puts "making shared library..." if $shared
+  ld=Dir.glob("./ext/*/lib").map do |li| next '' if !$libs.index(li.split("/")[2]);lrp << li;$libs.index(q=li.split("/")[2]) ? "-X -l:#{li}/lib#{q}.so " : '' end.join("")
+  lrp = "-X -Wl,-soname,#{prg} -X -Wl,-rpath=./ "+lrp.map do |q| "-X -Wl,-rpath='#{Dir.getwd}/#{q}' -X -L#{q[2..-1]} -X -l:lib#{q.split("/")[2]}.so" end.join(" ")#+ld
+  c="valac#{l} #{lrp} -X -L./ #{} #{Dir.glob("./q_generated/*").map do |i| $libs.index(File.basename(i)) ? "-X -I#{i} " : ''  end.join(" ")} #{$vapidir ? "--vapidir="+$vapidir+" " : ''} --vapidir=./ #{f.join(" ")}#{pkg} -o #{prg} -X -Wno-discarded-qualifiers -X -Wno-deprecated-declarations --disable-warnings"
+  STDERR.puts "\e[35m"+c[0..4]+"\e[0m"+c[5..-1]
+  unless system c
+    exit(1)
+  end
+  
+  if $shared
+    File.open("#{lib}.deps", "w") do |out|
+      $pkg.each do |p| out.puts p end
+    end
+  end
+  
+  if $gir
+    STDERR.puts "\e[1mGenerating GIR...\e[0m"
+    `mkdir -p #{e}`
+    `mv #{prg} #{e}`
+    cmd = "g-ir-compiler --includedir ./ --shared-library=lib#{lib} #{lib}-0.1.gir -o #{e}#{lib}-0.1.typelib"
+    STDERR.puts "\e[35m"+cmd[0..12]+"\e[0m"+cmd[13..-1]
+    exit 1 unless system(cmd)
+    STDERR.puts "\e[1mGIR - extension @: #{e}\e[0m"
+    STDERR.puts "\e[1mGIR - loader @: #{gir}\e[0m"
+    #system "sudo cp #{lib}-1.0.typelib /usr/lib/girepository-1.0/"
+  end
 end
 
 def run prg=$prg
@@ -116,163 +148,246 @@ def run prg=$prg
   system c
 end
 
-$Q=""
-$sao=[]
-ARGV.each do |file|
-  if $i
+def setup
+  $shared = options[:shared]
+  $shared ||= $gir = options[:gir]
+  $shared ||= $budgie_plugin = options[:budgie_plugin]
 
-    q = DATA.read % f=File.expand_path(file)
-    File.open("./.libq.rb","w") do |o| o.puts q end
-    puts c="ruby -r ./.libq.rb #{f}"
-    `#{c}` 
+  $plugin = $budgie_plugin || $xfce_plugin
+
+  $ruby = []
+  $req={}  
+
+
+  $run = options[:run]
+  $exe = $c = options[:code]
+  $run = true if $c
+  ARGV << "%s" if $exe
+
+  $pkg = []
+
+  if options[:pkg]
+    $pkg.push(options[:pkg])
+  end
+
+
+  ARGV.push "-" if ARGV.empty? && !$c
+
+  $parser = parser    = RubyParser.new
+  ruby2ruby =$r2v= Ruby2Ruby.new
+  $sao=[]
+  $sa = sa={}
+  $delete = []
+  sc=RootScope.new
+  $scope = [r=sc]
+  r.map['string.split'] = 'string[]'
+  
+  $scope[0].map["GLib.Application.open"] = e=Scope.new($scope[0])
+  e.return_type = :void
+  e.name = "open"
+  e.args << "files"
+  e.qargs << "File[]"
+  e.map["files"] = "File[]"
+  $scope[0].map["Gtk.Application.open"] = e   
+  $scope[0].map["Gtk.TextBuffer.get_modified"] = e=Scope.new($scope[0])
+  e.return_type = :bool
+  e.name = "get_modified"
+  $scope[0].map["Gtk.SourceBuffer.get_modified"] = e=Scope.new($scope[0])
+  e.return_type = :bool
+  e.name = "get_modified"
+  $scope[0].map["GLib.FileUtils.test"] = e=Scope.new($scope[0])
+  e.return_type = :bool
+  e.name = "GLib.FileUtils.test"
+  e.args.push "path", "tests"
+  e.qargs.push "string", "FileTest"
+  e.map["path"] = "string"
+  e.map["test"] = "FileTest"
+end
+
+def ruby2ruby
+  Ruby2Ruby.new
+end
+
+def sa
+  $sa
+end
+
+def clear sc=RootScope.new
+  $Q=""
+  $SIG=nil
+  $KLASS=nil
+  $FE=nil
+  $return=nil
+  $CTAGS = [] if options[:tags] || $CTAGS
+  $ruby = []
+  $req={}
+end
+
+def perform times=4,data=nil
+  $program = File.expand_path(ARGV[0]) unless $shared
+  for i in 0..times   
+    $NO_COM = (i==0)
+    return if (i==times) && (times==4)
+    clear
+    
+    if i > 0    
+      begin
+        $scope = [Marshal.load($TYPES)]
+      rescue
+        raise "hell"
+      end
+
+      si = -1
+      $rb_prg = sa.map do |q| q end[0][0]
+      sa.each do |f,sexp|
+        $file = f
+        $ruby << $sao[si+1]
+
+        r2vala sexp
+      end
+      
+    else
+      ARGV.each do |file|
+        STDERR.puts "\e[1mtranspiling: #{file}\e[0m"
+        if $i
+          q = DATA.read % f=File.expand_path(file)
+          File.open("./.libq.rb","w") do |o| o.puts q end
+          puts c="ruby -r ./.libq.rb #{f}"
+          `#{c}` 
+          exit
+        end
+
+        if file == '-'
+          #$run=true
+          `mkdir -p ./.q_in`
+          file = "./.q_in/e.rb" 
+          x=nil
+          File.open(file,"w") do |f| f.puts x=$stdin.read end
+ 
+        end
+
+        if file == 'BUFFER'
+          #$run=true
+          `mkdir -p ./.q_in`
+          file = "./.q_in/e.rb" 
+          x=nil
+          File.open(file,"w") do |f| f.puts data end
+ 
+        end
+        
+        if file == '%s'
+          $run=true
+          `mkdir -p ./.q_in`
+          file = "./.q_in/e.rb" 
+          File.open(file,"w") do |f| f.puts $c end
+        end  
+        
+        $pdir ||= File.dirname(file)
+        $prg ||= File.basename(file).split(".")[0]
+        $sao << f=f_path(file)
+
+        sexp = q_require file, true
+
+        $req[file] = ruby2ruby.process(sexp)
+      end    
+    end
+    
+    $TYPES = Marshal.dump($scope[0]) 
+  end
+end
+
+
+def finish
+  #$req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
+  #$sao.unshift "./q.q"
+  
+  puts output if $v
+  
+  if $CTAGS
+    require 'json'
+    #puts(JSON.pretty_generate($CTAGS))
+    $CTAGS.reverse.each do |t| puts t.to_json end
+    exit
+    $CTAGS.reverse.each do |t|
+      puts "#{t[:line]} #{t[:ruby] ? t[:ruby] : t[:symbol]} #{t[:kind]} #{t[:parent] || 'main'} #{t[:rb_path] ? t[:rb_path] : t[:path]} #{t[:virtual]} #{t[:return_type].to_t!} #{(t[:args]||[]).join(" ")}"
+    end
+    exit
+  end
+  
+  compile write
+  run if $run && !$shared
+  if $budgie_plugin
+    plug_dir = "#{ENV['HOME']}/.local/share/budgie-desktop/plugins"
+    `mkdir -p #{plug_dir}`
+    if !File.exist?(pf=plug_dir+"/#{$plugin_name}.plugin")
+      File.open(pf,'w') do |opf|
+        opf.puts pfc="""[Plugin]
+Module=#{$plugin_name}.so
+Name=#{$plugin_name}
+Description=A Plugin in Q
+Authors=you
+Copyright=Copyright #{Time.now.year}
+Website=http://your.project.site
+Icon=user-home-symbolic
+        """
+        
+STDERR.puts pfc
+STDERR.puts "@ #{pf}"
+      end
+    end
+    
+    `mv #{$shared_lib} #{plug_dir}/`
+    
+    fork do
+      fork do
+        system "budgie-panel --replace &"
+      end
+    end
+  end
+end
+
+if __FILE__ == $0
+  require 'options'
+
+  if options[:list_extensions]
+    Dir.glob("./ext/*/lib").each do |p|
+      e=p.split("/")[2]
+      p extension: e, path: p, loader: "./"+e+".rb"
+    end
     exit
   end
 
-  if file == '-'
-    $run=true
-    `mkdir -p ./.q_in`
-    file = "./.q_in/e.rb" 
-    File.open(file,"w") do |f| f.puts $stdin.read end
+  if options[:doc]
+    system("#{File.dirname(path)}/qdoc #{ARGV.join(" ")}")
+    exit 0
   end
   
-  if file == '%s'
-    $run=true
-    `mkdir -p ./.q_in`
-    file = "./.q_in/e.rb" 
-    File.open(file,"w") do |f| f.puts $c end
-  end  
-  
-  $pdir ||= File.dirname(file)
-  $prg ||= File.basename(file).split(".")[0]
-  $sao << f=f_path(file)
+  if options[:clobber]
+    libs = Dir.glob("./ext/*/lib").map do |q| q.split("/")[-2] end
 
-  sexp = q_require file
-
-  p sexp if $s
-
-  $req[file] = $one=ruby2ruby.process(sexp)
-  puts output if $first
-end
-
-$req = {}
-
-## One pass transpilation, requires more strict typing
-# puts $one;exit
-if $CTAGS
-  puts($CTAGS.join("\n"))
-  exit
-end
-File.open("./types.rbm", "w") do |f|
-  f.puts Marshal.dump($scope[0])
-end
-
-  begin
-    $scope = [Marshal.load(open('./types.rbm').read)]
-  rescue
-    raise "hell"
+    cmd = "rm -rf ./ext ./*.gir ./*.vapi ./*.deps ./q_generated #{libs.map do |q| "#{q}.rb" end.join(" ")}"
+    puts cmd
+    puts "continue? [y/N]"
+    system cmd if gets.chomp.strip.downcase == 'y'
+    exit
   end
-$Q=""
-$SIG=nil
-$KLASS=nil
-$FE=nil
-$return=nil
 
-a=$ruby
-$ruby = []
-i=-1
-#$two = true
-sa.each do |f,sexp|
-  $ruby << a[i+1]
-
-  $req[sexp.file] = o=ruby2ruby.process(sexp)
-  puts out="namespace Q { public double tt = #{Time.now-$t};}\n\n"+output if $two
-  
-  ## Two pass compilation more inference
-  ## return types, full type assignment to vars, argument types from usage, more fields values
-  exit if $two
-end
-$req = {}
-File.open("./types.rbm", "w") do |f|
-  f.puts Marshal.dump($scope[0])
-end
-
-  begin
-    $scope = [Marshal.load(open('./types.rbm').read)]
-  rescue
-    raise "hell"
+  if lib=options[:clobber_lib]
+    cmd = "rm -rf ./ext/#{lib} ./#{lib}-0.1.gir ./#{lib}.vapi ./#{lib}.deps ./q_generated/#{lib} ./q_generated/q_pkg/#{lib}.qpk #{lib}.rb"
+    puts cmd
+    puts "continue? [y/N]"
+    system cmd if gets.chomp.strip.downcase == 'y'    
+    exit
   end
-$Q=""
-$SIG=nil
-$KLASS=nil
-$FE=nil
-$return=nil
 
+  setup
+  n=4
+  n=1 if $NQ==0
 
-$ruby = []
-i=-1
-$sao.each do |f|
-  sexp = $sa[f]
-  $ruby << a[i+1]
-  
-  r2vala(sexp)
-  
-  ##  Three passes: much infer
-  ##  return type, full type var assigment, return of type infered from argument, most field values
-end
-$req = {}
-File.open("./types.rbm", "w") do |f|
-  f.puts Marshal.dump($scope[0])
+  perform n
+  finish
 end
 
-  begin
-    $scope = [Marshal.load(open('./types.rbm').read)]
-  rescue
-    raise "hell"
-  end
-$Q=""
-$SIG=nil
-$KLASS=nil
-$FE=nil
-$return=nil
-
-
-$ruby = []
-i=-1
-$sao.each do |f|
-  sexp = $sa[f]
-  $ruby << a[i+1]
-  
-  r2vala(sexp)
-  
-  ##  Three passes: much infer
-  ##  return type, full type var assigment, return of type infered from argument, most field values
-end
-
-
-$req["./q.q"] = "namespace Q { public double tt = #{Time.now-$t};}\n\n"
-$sao.unshift "./q.q"
-puts output if $v
-
-compile write
-run if $run && !$shared
-def vapi scope
-scope.map.map do |k,v|
-  if v.is_a?(Scope)
-    if v.namespace?
-      "namespace #{v.name} {"+
-        vapi(v)
-      "}"
-    elsif v.class?
-      "public class #{v.name} {"+
-        vapi(v)
-      ""
-      
-    else 
-      v.name
-    end
-  end
-end.join("\n")
-end
 
 __END__
 $: << f=File.expand_path(File.dirname("%s"))

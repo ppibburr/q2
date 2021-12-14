@@ -1,16 +1,8 @@
 require pkg: "vte-2.91"
 require pkg: "gtk+-3.0"
 
-namespace module QTe
-  class App
-    defn ['string[]']
-    def initialize argv
-      Gtk.init(ref argv)      
-      Window.new().term.child_exited.connect() do Gtk.main_quit() end  
-      Gtk.main()
-    end
-  end
-  
+namespace
+module QTe  
   class Window < Gtk::Window
     def initialize
       #//create the new terminal

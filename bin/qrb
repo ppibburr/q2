@@ -1,0 +1,58 @@
+#!/usr/bin/env ruby
+fst=Time.now
+$: << File.join(File.dirname(__FILE__), "/../lib")
+require "readline"
+require 'ruby2vala'
+require 'ruby_parser'
+load File.dirname(__FILE__)+"/q"
+i=true
+st=nil
+while i
+st=Time.now if st
+setup
+st=fst if !st
+# Open a pipe that can be used to communicate between two processes
+pipe_main, pipe_fork = IO.pipe
+
+pid = fork do
+  # The code in the fork block runs in another, forked Ruby process
+  # It won't interfere with your main process
+
+  begin
+    # First, close the main process' end of the pipe
+    pipe_main.close
+      perform
+      finish
+    # Run the evil code here and dump any objects of interest into the pipe
+    #Marshal.dump some_object, pipe_fork
+  rescue => e
+    raise e
+    # Dump any exception to the pipe
+    Marshal.dump $!, pipe_fork
+  end
+
+  # Close the pipe end of the forked process and exit
+  pipe_fork.flush
+  pipe_fork.close
+  exit!
+end
+
+# The following code will run in parallel to the forked process above
+
+# First, close the forked process' end of the pipe
+pipe_fork.close
+# Read objects of interest from the pipe
+#some_object = Marshal.load pipe_main
+# Wait for the forked process to end
+Process.wait pid
+# Close the pipe end of the main process
+pipe_main.close
+
+# The forked process might also raise an exception, so you might want to re-raise it
+#raise some_object if some_object.is_a? Exception
+  p Time.now-st
+  Readline::HISTORY << ARGV.join(" ")
+  i=Readline.readline("> ", true)
+  
+  ARGV=i.split(" ")
+end
